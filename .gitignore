@@ -1,0 +1,11 @@
+dist/
+node_modules/
+
+*.java
+*.py
+*.rs
+*.c
+*.h
+*.cpp
+
+target/
