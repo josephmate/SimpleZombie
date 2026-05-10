@@ -8,7 +8,8 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "excalibur": "0.32.0"
+    "excalibur": "0.32.0",
+    "nipplejs": "^1.0.0"
   },
   "devDependencies": {
     "typescript": "6.0.3",

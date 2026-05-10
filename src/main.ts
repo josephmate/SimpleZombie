@@ -11,6 +11,32 @@ import {
   Canvas,
   GraphicsGroup,
 } from 'excalibur';
+import nipplejs from 'nipplejs';
+
+// ── Mobile detection & joystick state ────────────────────────────────────────
+const IS_MOBILE = window.matchMedia('(pointer: coarse)').matches;
+let joystickDx = 0;
+let joystickDy = 0;
+
+if (IS_MOBILE) {
+  const zone = document.getElementById('joystick-zone') as HTMLElement;
+  const manager = nipplejs.create({
+    zone,
+    mode: 'static',
+    position: { left: '50%', top: '50%' },
+    color: 'white',
+    size: 100,
+  });
+  manager.on('move', (evt) => {
+    const v = evt.data.vector;
+    joystickDx = v.x;
+    joystickDy = -v.y; // nipplejs y is inverted vs screen
+  });
+  manager.on('end', () => {
+    joystickDx = 0;
+    joystickDy = 0;
+  });
+}
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 const GRID_W = 1200;
@@ -156,12 +182,17 @@ game.start().then(() => {
 
   // ── Update loop ──────────────────────────────────────────────────────────
   scene.onPreUpdate = (_eng, _delta) => {
-    // ── Player movement (WASD) ──────────────────────────────────────────────
+    // ── Player movement (WASD on desktop, nipplejs on mobile) ───────────────
     let pdx = 0, pdy = 0;
-    if (game.input.keyboard.isHeld(Keys.W)) pdy -= PLAYER_SPEED;
-    if (game.input.keyboard.isHeld(Keys.S)) pdy += PLAYER_SPEED;
-    if (game.input.keyboard.isHeld(Keys.A)) pdx -= PLAYER_SPEED;
-    if (game.input.keyboard.isHeld(Keys.D)) pdx += PLAYER_SPEED;
+    if (IS_MOBILE) {
+      pdx = joystickDx * PLAYER_SPEED;
+      pdy = joystickDy * PLAYER_SPEED;
+    } else {
+      if (game.input.keyboard.isHeld(Keys.W)) pdy -= PLAYER_SPEED;
+      if (game.input.keyboard.isHeld(Keys.S)) pdy += PLAYER_SPEED;
+      if (game.input.keyboard.isHeld(Keys.A)) pdx -= PLAYER_SPEED;
+      if (game.input.keyboard.isHeld(Keys.D)) pdx += PLAYER_SPEED;
+    }
     playerX = clamp(playerX + pdx, 0, GRID_W);
     playerY = clamp(playerY + pdy, 0, GRID_H);
     playerActor.pos = new Vector(playerX, playerY);

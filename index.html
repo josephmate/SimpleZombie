@@ -18,9 +18,25 @@
         height: 100vh;
         overflow: hidden;
       }
+      #joystick-zone {
+        position: fixed;
+        bottom: 40px;
+        left: 40px;
+        width: 120px;
+        height: 120px;
+        z-index: 100;
+        display: none; /* hidden by default (desktop) */
+      }
+      @media (pointer: coarse) {
+        /* show only on touch/mobile devices */
+        #joystick-zone {
+          display: block;
+        }
+      }
     </style>
   </head>
   <body>
+    <div id="joystick-zone"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
