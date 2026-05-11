@@ -4,12 +4,9 @@ import {
   Color,
   Actor,
   Circle,
-  PolygonCollider,
   Vector,
-  Scene,
   Keys,
   Canvas,
-  GraphicsGroup,
 } from 'excalibur';
 import nipplejs from 'nipplejs';
 
@@ -35,7 +32,6 @@ interface Corpse {
   vx: number; // slide velocity from bullet impact
   vy: number;
   color: string;
-  actor: Actor;
 }
 
 const corpses: Corpse[] = [];
@@ -46,6 +42,7 @@ interface Bullet {
   vx: number;
   vy: number;
   age: number;
+  actor: Actor;
 }
 
 const bullets: Bullet[] = [];
@@ -120,8 +117,8 @@ const HUMAN_MIN_SPEED = 0.8;
 const INFECT_DIST_SQ = 20 * 20;     // zombie infects human when this close
 const ZOMBIE_DAMAGE_DIST_SQ = 16 * 16;
 
-const NUM_ZOMBIES = 20;
-const NUM_CIVILIANS = 30;
+const NUM_ZOMBIES   = IS_MOBILE ? 12 : 20;
+const NUM_CIVILIANS = IS_MOBILE ? 18 : 30;
 
 const ZOMBIE_RADIUS = 10;
 const PLAYER_RADIUS = 12;
@@ -132,6 +129,8 @@ const BG_COLOR       = Color.fromHex('#d0d0d0'); // light gray background
 const ZOMBIE_COLOR   = Color.fromRGB(144, 238, 144); // pale green
 const CIVILIAN_COLOR = Color.fromRGB(80, 80, 80); // dark grey
 const PLAYER_COLOR   = Color.fromRGB(60, 100, 230);  // blue
+const ZOMBIE_COLOR_STR   = 'rgb(144,238,144)';
+const CIVILIAN_COLOR_STR = 'rgb(80,80,80)';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function randFloat(min: number, max: number): number {
@@ -183,7 +182,6 @@ interface Being {
   speed: number;
   type: 'zombie' | 'human';
   hp: number;
-  actor: Actor;
   pendingInfect?: boolean;
 }
 
@@ -193,6 +191,9 @@ const game = new Engine({
   height: GRID_H,
   displayMode: DisplayMode.FitScreen,
   backgroundColor: BG_COLOR,
+  // Cap pixel ratio to 1 on mobile — phones have 2x/3x DPR which makes the
+  // backing canvas 4–9× larger, killing fill-rate performance.
+  pixelRatio: IS_MOBILE ? 1 : Math.min(window.devicePixelRatio, 2),
 });
 
 // Player actor (blue star drawn via Canvas)
@@ -222,46 +223,24 @@ playerActor.pos = new Vector(playerX, playerY);
 const beings: Being[] = [];
 
 function makeBeing(type: 'zombie' | 'human', x: number, y: number): Being {
-  const color = type === 'zombie' ? ZOMBIE_COLOR : CIVILIAN_COLOR;
-  const radius = type === 'zombie' ? ZOMBIE_RADIUS : CIVILIAN_RADIUS;
-  const actor = new Actor({ x, y, z: type === 'zombie' ? 5 : 3 });
-  actor.graphics.use(new Circle({ radius, color }));
   return {
     x, y,
     angle: Math.random() * Math.PI * 2,
     speed: type === 'zombie' ? ZOMBIE_MAX_SPEED * 0.5 : HUMAN_MIN_SPEED,
     hp: BEING_MAX_HP,
     type,
-    actor,
   };
 }
 
-function makeCorpse(scene: Scene, x: number, y: number, colorStr: string): Corpse {
-  const actor = new Actor({ x, y, z: 1 });
-  const corpse: Corpse = { x, y, vx: 0, vy: 0, color: colorStr, actor };
-  const cv = new Canvas({
-    width: CORPSE_SIZE,
-    height: CORPSE_SIZE,
-    cache: false,
-    draw(ctx) {
-      ctx.clearRect(0, 0, CORPSE_SIZE, CORPSE_SIZE);
-      ctx.fillStyle = corpse.color;
-      ctx.fillRect(0, 0, CORPSE_SIZE, CORPSE_SIZE);
-    },
-  });
-  actor.graphics.use(cv);
-  scene.add(actor);
-  return corpse;
+function makeCorpse(x: number, y: number, colorStr: string): Corpse {
+  return { x, y, vx: 0, vy: 0, color: colorStr };
 }
 
-function killBeing(scene: Scene, beings: Being[], idx: number): Corpse {
+function killBeing(beings: Being[], idx: number): Corpse {
   const be = beings[idx];
-  const colorStr = be.type === 'zombie'
-    ? `rgb(${ZOMBIE_COLOR.r},${ZOMBIE_COLOR.g},${ZOMBIE_COLOR.b})`
-    : `rgb(${CIVILIAN_COLOR.r},${CIVILIAN_COLOR.g},${CIVILIAN_COLOR.b})`;
-  be.actor.kill();
+  const colorStr = be.type === 'zombie' ? ZOMBIE_COLOR_STR : CIVILIAN_COLOR_STR;
   beings.splice(idx, 1);
-  return makeCorpse(scene, be.x, be.y, colorStr);
+  return makeCorpse(be.x, be.y, colorStr);
 }
 
 for (let i = 0; i < NUM_ZOMBIES; i++) {
@@ -288,31 +267,38 @@ game.start().then(() => {
   }
 
   scene.add(playerActor);
-  for (const b of beings) scene.add(b.actor);
 
-  // ── Bullet canvas (redraws every frame) ──────────────────────────────────
-  const bulletActor = new Actor({ x: GRID_W / 2, y: GRID_H / 2, z: 8 });
-  const bulletCanvas = new Canvas({
+  // ── Beings+corpses canvas (one actor replaces 50+ individual actors) ───────
+  const beingsActor = new Actor({ x: GRID_W / 2, y: GRID_H / 2, z: 3 });
+  const beingsCanvas = new Canvas({
     width: GRID_W,
     height: GRID_H,
     cache: false,
     draw(ctx) {
       ctx.clearRect(0, 0, GRID_W, GRID_H);
-      ctx.strokeStyle = '#2a1a0a'; // dark dry brown
-      ctx.lineWidth = 1.2;
-      for (const bul of bullets) {
-        // Tail offset: one velocity step back for short line
-        const tailX = bul.x - bul.vx;
-        const tailY = bul.y - bul.vy;
+      for (const co of corpses) {
+        ctx.fillStyle = co.color;
+        ctx.fillRect(co.x - CORPSE_SIZE / 2, co.y - CORPSE_SIZE / 2, CORPSE_SIZE, CORPSE_SIZE);
+      }
+      for (const b of beings) {
+        ctx.fillStyle = b.type === 'zombie' ? ZOMBIE_COLOR_STR : CIVILIAN_COLOR_STR;
         ctx.beginPath();
-        ctx.moveTo(tailX, tailY);
-        ctx.lineTo(bul.x, bul.y);
-        ctx.stroke();
+        ctx.arc(b.x, b.y, b.type === 'zombie' ? ZOMBIE_RADIUS : CIVILIAN_RADIUS, 0, Math.PI * 2);
+        ctx.fill();
       }
     },
   });
-  bulletActor.graphics.use(bulletCanvas);
-  scene.add(bulletActor);
+  beingsActor.graphics.use(beingsCanvas);
+  scene.add(beingsActor);
+
+  // ── Bullet helper ──────────────────────────────────────────────────────────
+  const removeBullet = (i: number) => {
+    bullets[i].actor.kill();
+    bullets.splice(i, 1);
+  };
+
+  const AI_THROTTLE = IS_MOBILE ? 2 : 1;
+  let aiFrame = 0;
 
   // ── HUD canvas (ammo display) ─────────────────────────────────────────────
   const HUD_W = 200, HUD_H = 30;
@@ -357,12 +343,14 @@ game.start().then(() => {
     }
     playerX = clamp(playerX + pdx, 0, GRID_W);
     playerY = clamp(playerY + pdy, 0, GRID_H);
-    playerActor.pos = new Vector(playerX, playerY);
+    playerActor.pos.x = playerX;
+    playerActor.pos.y = playerY;
 
     // ── Keep HUD pinned to bottom-left of viewport ────────────────────────
     const cam = scene.camera;
     const vp = cam.viewport;
-    hudActor.pos = new Vector(vp.left + HUD_W / 2 + 8, vp.bottom - HUD_H / 2 - 8);
+    hudActor.pos.x = vp.left + HUD_W / 2 + 8;
+    hudActor.pos.y = vp.bottom - HUD_H / 2 - 8;
 
     // ── Shooting (PC only) ────────────────────────────────────
     if (!IS_MOBILE) {
@@ -397,12 +385,16 @@ game.start().then(() => {
             const spread = randFloat(-spreadMax, spreadMax);
             const angle = Math.atan2(dy, dx) + spread;
             const speed = BULLET_SPEED * randFloat(0.95, 1.05);
+            const bActor = new Actor({ x: playerX, y: playerY, z: 8 });
+            bActor.graphics.use(new Circle({ radius: 2, color: Color.fromHex('#2a1a0a') }));
+            scene.add(bActor);
             bullets.push({
               x:  playerX,
               y:  playerY,
               vx: speed * Math.cos(angle),
               vy: speed * Math.sin(angle),
               age: 0,
+              actor: bActor,
             });
           }
 
@@ -428,12 +420,14 @@ game.start().then(() => {
         bul.x += bul.vx;
         bul.y += bul.vy;
         bul.age++;
+        bul.actor.pos.x = bul.x;
+        bul.actor.pos.y = bul.y;
 
         // Remove if out of bounds or expired
         if (bul.age >= BULLET_LIFETIME ||
             bul.x < 0 || bul.x > GRID_W ||
             bul.y < 0 || bul.y > GRID_H) {
-          bullets.splice(i, 1);
+          removeBullet(i);
           continue;
         }
 
@@ -445,10 +439,10 @@ game.start().then(() => {
           if (dist2(bul.x, bul.y, be.x, be.y) < HIT_R * HIT_R ||
               dist2(bul.x - bul.vx / 2, bul.y - bul.vy / 2, be.x, be.y) < HIT_R * HIT_R) {
             be.hp -= BULLET_DAMAGE;
-            bullets.splice(i, 1);
+            removeBullet(i);
             hit = true;
             if (be.hp <= 0) {
-              corpses.push(killBeing(scene, beings, j));
+              corpses.push(killBeing(beings, j));
             }
             break;
           }
@@ -464,7 +458,7 @@ game.start().then(() => {
             // Jiggle the corpse slightly in the bullet's direction
             co.vx += bul.vx * 0.4;
             co.vy += bul.vy * 0.4;
-            bullets.splice(i, 1);
+            removeBullet(i);
             hit = true;
             break;
           }
@@ -485,12 +479,16 @@ game.start().then(() => {
             const spread = randFloat(-spreadMax, spreadMax);
             const angle = Math.atan2(fireJoyDy, fireJoyDx) + spread;
             const speed = BULLET_SPEED * randFloat(0.95, 1.05);
+            const bActor = new Actor({ x: playerX, y: playerY, z: 8 });
+            bActor.graphics.use(new Circle({ radius: 2, color: Color.fromHex('#2a1a0a') }));
+            scene.add(bActor);
             bullets.push({
               x:  playerX,
               y:  playerY,
               vx: speed * Math.cos(angle),
               vy: speed * Math.sin(angle),
               age: 0,
+              actor: bActor,
             });
           }
           bTime = 0;
@@ -523,11 +521,13 @@ game.start().then(() => {
         bul.x += bul.vx;
         bul.y += bul.vy;
         bul.age++;
+        bul.actor.pos.x = bul.x;
+        bul.actor.pos.y = bul.y;
 
         if (bul.age >= BULLET_LIFETIME ||
             bul.x < 0 || bul.x > GRID_W ||
             bul.y < 0 || bul.y > GRID_H) {
-          bullets.splice(i, 1);
+          removeBullet(i);
           continue;
         }
 
@@ -538,10 +538,10 @@ game.start().then(() => {
           if (dist2(bul.x, bul.y, be.x, be.y) < HIT_R * HIT_R ||
               dist2(bul.x - bul.vx / 2, bul.y - bul.vy / 2, be.x, be.y) < HIT_R * HIT_R) {
             be.hp -= BULLET_DAMAGE;
-            bullets.splice(i, 1);
+            removeBullet(i);
             hit = true;
             if (be.hp <= 0) {
-              corpses.push(killBeing(scene, beings, j));
+              corpses.push(killBeing(beings, j));
             }
             break;
           }
@@ -555,7 +555,7 @@ game.start().then(() => {
               bul.y >= co.y - half && bul.y <= co.y + half) {
             co.vx += bul.vx * 0.4;
             co.vy += bul.vy * 0.4;
-            bullets.splice(i, 1);
+            removeBullet(i);
             hit = true;
             break;
           }
@@ -564,120 +564,95 @@ game.start().then(() => {
       }
     }
 
-    // ── Beings update ────────────────────────────────────────────────────────
+    // ── Beings update (AI runs every AI_THROTTLE frames; movement every frame) ─
+    aiFrame++;
+    const runAI = (aiFrame % AI_THROTTLE === 0);
     for (let i = 0; i < beings.length; i++) {
       const b = beings[i];
 
-      if (b.type === 'zombie') {
-        // ── Zombie movement (from zombie4 zombie.move()) ──────────────────
-        const dpx = playerX - b.x;
-        const dpy = playerY - b.y;
-        const dPlayer2 = dpx * dpx + dpy * dpy;
+      if (runAI) {
+        if (b.type === 'zombie') {
+          // ── Zombie AI ──────────────────────────────────────────────────
+          const dpx = playerX - b.x;
+          const dpy = playerY - b.y;
+          const dPlayer2 = dpx * dpx + dpy * dpy;
 
-        if (dPlayer2 < ZOMBIE_ALERT_DIST * ZOMBIE_ALERT_DIST) {
-          // Chase player
-          const targetAngle = Math.atan2(dpy, dpx) + randFloat(-0.2, 0.2);
-          let diff = wrapAngle(targetAngle - b.angle);
-          diff = clamp(diff, -0.1, 0.1);
-          b.angle = wrapAngle(b.angle + diff);
-
-          // Damage player if very close (handled conceptually - no HP display)
-        } else {
-          // Hunt nearest human
-          let bestDist2 = 800000;
-          let bestIdx = -1;
-          for (let j = 0; j < beings.length; j++) {
-            if (j !== i && beings[j].type === 'human') {
-              const d2 = dist2(b.x, b.y, beings[j].x, beings[j].y);
-              if (d2 < bestDist2) {
-                bestDist2 = d2;
-                bestIdx = j;
-              }
-            }
-          }
-
-          if (bestIdx >= 0) {
-            const targetAngle = Math.atan2(beings[bestIdx].y - b.y, beings[bestIdx].x - b.x) + randFloat(-0.2, 0.2);
+          if (dPlayer2 < ZOMBIE_ALERT_DIST * ZOMBIE_ALERT_DIST) {
+            // Chase player
+            const targetAngle = Math.atan2(dpy, dpx) + randFloat(-0.2, 0.2);
             let diff = wrapAngle(targetAngle - b.angle);
             diff = clamp(diff, -0.1, 0.1);
             b.angle = wrapAngle(b.angle + diff);
-
-            // Infect human if close enough
-            if (bestDist2 < INFECT_DIST_SQ) {
-              beings[bestIdx].pendingInfect = true;
-              b.speed = 0;
-            }
           } else {
-            // Wander
-            b.angle = wrapAngle(b.angle + randFloat(-0.1, 0.1));
-          }
-        }
-
-        // Small random wobble
-        b.angle = wrapAngle(b.angle + randFloat(-0.01, 0.01));
-
-        // Accelerate toward maxSpeed
-        if (b.speed < ZOMBIE_MAX_SPEED) {
-          b.speed = Math.min(b.speed + ZOMBIE_ACCEL, ZOMBIE_MAX_SPEED);
-        } else {
-          b.speed += randFloat(-0.1, ZOMBIE_ACCEL);
-          b.speed = clamp(b.speed, 0.7, ZOMBIE_MAX_SPEED);
-        }
-
-        const vx = b.speed * Math.cos(b.angle);
-        const vy = b.speed * Math.sin(b.angle);
-        b.x = clamp(b.x + vx, 0, GRID_W);
-        b.y = clamp(b.y + vy, 0, GRID_H);
-
-      } else {
-        // ── Human (civilian) movement (from zombie4 human.move()) ─────────
-        // Find nearest zombie and flee from it
-        let bestDist2 = 800000;
-        let bestIdx = -1;
-        for (let j = 0; j < beings.length; j++) {
-          if (beings[j].type === 'zombie') {
-            const d2 = dist2(b.x, b.y, beings[j].x, beings[j].y);
-            if (d2 < bestDist2) {
-              bestDist2 = d2;
-              bestIdx = j;
+            // Hunt nearest human
+            let bestDist2 = 800000;
+            let bestIdx = -1;
+            for (let j = 0; j < beings.length; j++) {
+              if (j !== i && beings[j].type === 'human') {
+                const d2 = dist2(b.x, b.y, beings[j].x, beings[j].y);
+                if (d2 < bestDist2) { bestDist2 = d2; bestIdx = j; }
+              }
+            }
+            if (bestIdx >= 0) {
+              const targetAngle = Math.atan2(beings[bestIdx].y - b.y, beings[bestIdx].x - b.x) + randFloat(-0.2, 0.2);
+              let diff = wrapAngle(targetAngle - b.angle);
+              diff = clamp(diff, -0.1, 0.1);
+              b.angle = wrapAngle(b.angle + diff);
+              if (bestDist2 < INFECT_DIST_SQ) {
+                beings[bestIdx].pendingInfect = true;
+                b.speed = 0;
+              }
+            } else {
+              b.angle = wrapAngle(b.angle + randFloat(-0.1, 0.1));
             }
           }
-        }
 
-        // 360000 = 600^2 — flee if zombie within 600px (zombie4 used 360000 threshold)
-        if (bestIdx >= 0 && bestDist2 < 360000) {
-          // Flee: angle AWAY from zombie (+PI)
-          const fleeAngle = Math.atan2(b.y - beings[bestIdx].y, b.x - beings[bestIdx].x);
-          let diff = wrapAngle(fleeAngle - b.angle);
-          diff = clamp(diff, -0.3, 0.3);
-          b.angle = wrapAngle(b.angle + diff);
-          b.angle = wrapAngle(b.angle + randFloat(-0.2, 0.2));
+          b.angle = wrapAngle(b.angle + randFloat(-0.01, 0.01));
+          if (b.speed < ZOMBIE_MAX_SPEED) {
+            b.speed = Math.min(b.speed + ZOMBIE_ACCEL, ZOMBIE_MAX_SPEED);
+          } else {
+            b.speed += randFloat(-0.1, ZOMBIE_ACCEL);
+            b.speed = clamp(b.speed, 0.7, ZOMBIE_MAX_SPEED);
+          }
+
         } else {
-          // Wander randomly
-          b.angle = wrapAngle(b.angle + randFloat(-0.3, 0.3));
+          // ── Human AI ───────────────────────────────────────────────────
+          let bestDist2 = 800000;
+          let bestIdx = -1;
+          for (let j = 0; j < beings.length; j++) {
+            if (beings[j].type === 'zombie') {
+              const d2 = dist2(b.x, b.y, beings[j].x, beings[j].y);
+              if (d2 < bestDist2) { bestDist2 = d2; bestIdx = j; }
+            }
+          }
+          if (bestIdx >= 0 && bestDist2 < 360000) {
+            const fleeAngle = Math.atan2(b.y - beings[bestIdx].y, b.x - beings[bestIdx].x);
+            let diff = wrapAngle(fleeAngle - b.angle);
+            diff = clamp(diff, -0.3, 0.3);
+            b.angle = wrapAngle(b.angle + diff);
+            b.angle = wrapAngle(b.angle + randFloat(-0.2, 0.2));
+          } else {
+            b.angle = wrapAngle(b.angle + randFloat(-0.3, 0.3));
+          }
+          b.speed += randFloat(-0.1, 0.1);
+          b.speed = clamp(b.speed, HUMAN_MIN_SPEED, HUMAN_MAX_SPEED);
         }
-
-        b.speed += randFloat(-0.1, 0.1);
-        b.speed = clamp(b.speed, HUMAN_MIN_SPEED, HUMAN_MAX_SPEED);
-
-        const vx = b.speed * Math.cos(b.angle);
-        const vy = b.speed * Math.sin(b.angle);
-        b.x = clamp(b.x + vx, 0, GRID_W);
-        b.y = clamp(b.y + vy, 0, GRID_H);
       }
 
-      b.actor.pos = new Vector(b.x, b.y);
+      // Always apply velocity
+      const vx = b.speed * Math.cos(b.angle);
+      const vy = b.speed * Math.sin(b.angle);
+      b.x = clamp(b.x + vx, 0, GRID_W);
+      b.y = clamp(b.y + vy, 0, GRID_H);
     }
 
     // ── Handle infections (convert humans to zombies) ─────────────────────
     for (let i = beings.length - 1; i >= 0; i--) {
       if (beings[i].pendingInfect) {
         const old = beings[i];
-        old.actor.kill();
         const newZombie = makeBeing('zombie', old.x, old.y);
         newZombie.speed = 0;
         beings[i] = newZombie;
-        scene.add(newZombie.actor);
       }
     }
 
@@ -687,7 +662,6 @@ game.start().then(() => {
       co.y += co.vy;
       co.vx *= CORPSE_VEL_DECAY;
       co.vy *= CORPSE_VEL_DECAY;
-      co.actor.pos = new Vector(co.x, co.y);
     }
   };
 });
