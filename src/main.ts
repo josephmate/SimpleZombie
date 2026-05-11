@@ -13,8 +13,53 @@ import {
 } from 'excalibur';
 import nipplejs from 'nipplejs';
 
+// ── Bullet system ─────────────────────────────────────────────────────────────
+const BULLET_SPEED      = 14;   // px per frame
+const BULLET_LIFETIME   = 60;   // frames before bullet expires
+const CLIP_SIZE         = 15;   // rounds per cartridge
+const SHOT_DELAY        = 7;    // frames between shots (like zombie4 pistol shotTime=7)
+const RELOAD_TIME       = 50;   // frames to reload (like zombie4 pistol reloadTime=30..40)
+const RECOIL_GROWTH_SPEED = 7;   // how much fireTime grows per shot
+const RECOIL_DECAY_SPEED  = 14;  // how much fireTime drops per frame when not shooting (faster than growth = encourages bursting)
+const RECOIL_MAX        = 60;   // max fireTime cap
+const BULLET_DAMAGE     = 34;   // HP per bullet hit
+
+// ── Corpse system ─────────────────────────────────────────────────────────────
+const BEING_MAX_HP      = 100;
+const CORPSE_SIZE       = 14;   // square side length
+const CORPSE_VEL_DECAY = 0.80; // how fast corpse slide velocity damps
+
+interface Corpse {
+  x: number;
+  y: number;
+  vx: number; // slide velocity from bullet impact
+  vy: number;
+  color: string;
+  actor: Actor;
+}
+
+const corpses: Corpse[] = [];
+
+interface Bullet {
+  x: number;
+  y: number;
+  vx: number;
+  vy: number;
+  age: number;
+}
+
+const bullets: Bullet[] = [];
+let bFired     = 0;        // shots fired in current clip
+let bTime      = SHOT_DELAY; // frames since last shot (start ready)
+let reloading  = false;
+let reloadTimer = 0;
+let fireTime   = 0;        // accumulated recoil
+let mouseDown  = false;
+let mouseWorldX = 0;
+let mouseWorldY = 0;
+
 // ── Mobile detection & joystick state ────────────────────────────────────────
-const IS_MOBILE = window.matchMedia('(pointer: coarse)').matches;
+const IS_MOBILE = !window.matchMedia('(pointer: fine)').matches;
 let joystickDx = 0;
 let joystickDy = 0;
 
@@ -37,6 +82,8 @@ if (IS_MOBILE) {
     joystickDy = 0;
   });
 }
+
+// PC mouse input is registered after game.start() using Excalibur's pointer system
 
 // ── Constants ──────────────────────────────────────────────────────────────────
 const GRID_W = 1200;
@@ -112,6 +159,7 @@ interface Being {
   angle: number; // heading in radians (atan2 convention: angle of velocity)
   speed: number;
   type: 'zombie' | 'human';
+  hp: number;
   actor: Actor;
   pendingInfect?: boolean;
 }
@@ -159,9 +207,38 @@ function makeBeing(type: 'zombie' | 'human', x: number, y: number): Being {
     x, y,
     angle: Math.random() * Math.PI * 2,
     speed: type === 'zombie' ? ZOMBIE_MAX_SPEED * 0.5 : HUMAN_MIN_SPEED,
+    hp: BEING_MAX_HP,
     type,
     actor,
   };
+}
+
+function makeCorpse(scene: Scene, x: number, y: number, colorStr: string): Corpse {
+  const actor = new Actor({ x, y, z: 1 });
+  const corpse: Corpse = { x, y, vx: 0, vy: 0, color: colorStr, actor };
+  const cv = new Canvas({
+    width: CORPSE_SIZE,
+    height: CORPSE_SIZE,
+    cache: false,
+    draw(ctx) {
+      ctx.clearRect(0, 0, CORPSE_SIZE, CORPSE_SIZE);
+      ctx.fillStyle = corpse.color;
+      ctx.fillRect(0, 0, CORPSE_SIZE, CORPSE_SIZE);
+    },
+  });
+  actor.graphics.use(cv);
+  scene.add(actor);
+  return corpse;
+}
+
+function killBeing(scene: Scene, beings: Being[], idx: number): Corpse {
+  const be = beings[idx];
+  const colorStr = be.type === 'zombie'
+    ? `rgb(${ZOMBIE_COLOR.r},${ZOMBIE_COLOR.g},${ZOMBIE_COLOR.b})`
+    : `rgb(${CIVILIAN_COLOR.r},${CIVILIAN_COLOR.g},${CIVILIAN_COLOR.b})`;
+  be.actor.kill();
+  beings.splice(idx, 1);
+  return makeCorpse(scene, be.x, be.y, colorStr);
 }
 
 for (let i = 0; i < NUM_ZOMBIES; i++) {
@@ -177,8 +254,70 @@ for (let i = 0; i < NUM_CIVILIANS; i++) {
 game.start().then(() => {
   const scene = game.currentScene;
 
+  // ── PC mouse input via Excalibur (gives worldPos accounting for camera/scale) ──
+  if (!IS_MOBILE) {
+    game.input.pointers.primary.on('down', () => { mouseDown = true; });
+    game.input.pointers.primary.on('up',   () => { mouseDown = false; });
+    game.input.pointers.primary.on('move', (evt) => {
+      mouseWorldX = evt.worldPos.x;
+      mouseWorldY = evt.worldPos.y;
+    });
+  }
+
   scene.add(playerActor);
   for (const b of beings) scene.add(b.actor);
+
+  // ── Bullet canvas (redraws every frame) ──────────────────────────────────
+  const bulletActor = new Actor({ x: GRID_W / 2, y: GRID_H / 2, z: 8 });
+  const bulletCanvas = new Canvas({
+    width: GRID_W,
+    height: GRID_H,
+    cache: false,
+    draw(ctx) {
+      ctx.clearRect(0, 0, GRID_W, GRID_H);
+      ctx.strokeStyle = '#2a1a0a'; // dark dry brown
+      ctx.lineWidth = 1.2;
+      for (const bul of bullets) {
+        // Tail offset: one velocity step back for short line
+        const tailX = bul.x - bul.vx;
+        const tailY = bul.y - bul.vy;
+        ctx.beginPath();
+        ctx.moveTo(tailX, tailY);
+        ctx.lineTo(bul.x, bul.y);
+        ctx.stroke();
+      }
+    },
+  });
+  bulletActor.graphics.use(bulletCanvas);
+  scene.add(bulletActor);
+
+  // ── HUD canvas (ammo display) ─────────────────────────────────────────────
+  const HUD_W = 200, HUD_H = 30;
+  const hudActor = new Actor({ x: HUD_W / 2 + 8, y: GRID_H - HUD_H / 2 - 8, z: 100 });
+  hudActor.pos = new Vector(HUD_W / 2 + 8, GRID_H - HUD_H / 2 - 8);
+  const hudCanvas = new Canvas({
+    width: HUD_W,
+    height: HUD_H,
+    cache: false,
+    draw(ctx) {
+      ctx.clearRect(0, 0, HUD_W, HUD_H);
+      ctx.fillStyle = 'rgba(0,0,0,0.55)';
+      ctx.fillRect(0, 0, HUD_W, HUD_H);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 14px monospace';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      if (reloading) {
+        const pct = reloadTimer / RELOAD_TIME;
+        ctx.fillText(`Reloading... ${Math.round(pct * 100)}%`, 8, HUD_H / 2);
+      } else {
+        const ammoLeft = CLIP_SIZE - bFired;
+        ctx.fillText(`Ammo: ${ammoLeft} / ${CLIP_SIZE}`, 8, HUD_H / 2);
+      }
+    },
+  });
+  hudActor.graphics.use(hudCanvas);
+  scene.add(hudActor);
 
   // ── Update loop ──────────────────────────────────────────────────────────
   scene.onPreUpdate = (_eng, _delta) => {
@@ -197,9 +336,121 @@ game.start().then(() => {
     playerY = clamp(playerY + pdy, 0, GRID_H);
     playerActor.pos = new Vector(playerX, playerY);
 
-    // ── Beings to remove ────────────────────────────────────────────────────
-    const toRemove: number[] = [];
+    // ── Keep HUD pinned to bottom-left of viewport ────────────────────────
+    const cam = scene.camera;
+    const vp = cam.viewport;
+    hudActor.pos = new Vector(vp.left + HUD_W / 2 + 8, vp.bottom - HUD_H / 2 - 8);
 
+    // ── Shooting (PC only) ────────────────────────────────────────────────
+    if (!IS_MOBILE) {
+      // R key: manual reload
+      if (game.input.keyboard.wasPressed(Keys.R) && !reloading && bFired > 0) {
+        reloading = true;
+        reloadTimer = 0;
+        fireTime = 0;
+      }
+
+      // Reload tick
+      if (reloading) {
+        reloadTimer++;
+        if (reloadTimer >= RELOAD_TIME) {
+          reloading = false;
+          reloadTimer = 0;
+          bFired = 0;
+        }
+      }
+
+      bTime++;
+
+      if (mouseDown && !reloading) {
+        if (bTime >= SHOT_DELAY && bFired < CLIP_SIZE) {
+          // Direction from player to mouse (world coords)
+          const dx = mouseWorldX - playerX;
+          const dy = mouseWorldY - playerY;
+          const len = Math.sqrt(dx * dx + dy * dy);
+          if (len > 0.001) {
+            // Apply recoil spread (like zombie4: random in [-fireTime/400, fireTime/400])
+            const spreadMax = fireTime / 400;
+            const spread = randFloat(-spreadMax, spreadMax);
+            const angle = Math.atan2(dy, dx) + spread;
+            const speed = BULLET_SPEED * randFloat(0.95, 1.05);
+            bullets.push({
+              x:  playerX,
+              y:  playerY,
+              vx: speed * Math.cos(angle),
+              vy: speed * Math.sin(angle),
+              age: 0,
+            });
+          }
+
+          bTime = 0;
+          bFired++;
+          fireTime = Math.min(fireTime + RECOIL_GROWTH_SPEED, RECOIL_MAX);
+
+          // Auto-reload when clip exhausted
+          if (bFired >= CLIP_SIZE) {
+            reloading = true;
+            reloadTimer = 0;
+            fireTime = 0;
+          }
+        }
+      } else {
+        // Decay recoil when not shooting
+        if (fireTime > 0) fireTime = Math.max(0, fireTime - RECOIL_DECAY_SPEED);
+      }
+
+      // ── Bullet movement + zombie hit detection ──────────────────────────
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        const bul = bullets[i];
+        bul.x += bul.vx;
+        bul.y += bul.vy;
+        bul.age++;
+
+        // Remove if out of bounds or expired
+        if (bul.age >= BULLET_LIFETIME ||
+            bul.x < 0 || bul.x > GRID_W ||
+            bul.y < 0 || bul.y > GRID_H) {
+          bullets.splice(i, 1);
+          continue;
+        }
+
+        // Check hit against beings (zombies and civilians)
+        let hit = false;
+        for (let j = beings.length - 1; j >= 0; j--) {
+          const be = beings[j];
+          const HIT_R = (be.type === 'zombie' ? ZOMBIE_RADIUS : CIVILIAN_RADIUS) + 4;
+          if (dist2(bul.x, bul.y, be.x, be.y) < HIT_R * HIT_R ||
+              dist2(bul.x - bul.vx / 2, bul.y - bul.vy / 2, be.x, be.y) < HIT_R * HIT_R) {
+            be.hp -= BULLET_DAMAGE;
+            bullets.splice(i, 1);
+            hit = true;
+            if (be.hp <= 0) {
+              corpses.push(killBeing(scene, beings, j));
+            }
+            break;
+          }
+        }
+        if (hit) continue;
+
+        // Check hit against corpses (bullets stop on corpses)
+        for (let j = corpses.length - 1; j >= 0; j--) {
+          const co = corpses[j];
+          const half = CORPSE_SIZE / 2;
+          if (bul.x >= co.x - half && bul.x <= co.x + half &&
+              bul.y >= co.y - half && bul.y <= co.y + half) {
+            // Jiggle the corpse slightly in the bullet's direction
+            co.vx += bul.vx * 0.4;
+            co.vy += bul.vy * 0.4;
+            bullets.splice(i, 1);
+            hit = true;
+            break;
+          }
+        }
+        if (hit) continue;
+      }
+    }
+
+    // ── Beings update ────────────────────────────────────────────────────────
     for (let i = 0; i < beings.length; i++) {
       const b = beings[i];
 
@@ -314,6 +565,15 @@ game.start().then(() => {
         beings[i] = newZombie;
         scene.add(newZombie.actor);
       }
+    }
+
+    // ── Corpse jiggle update ──────────────────────────────────────────────
+    for (const co of corpses) {
+      co.x += co.vx;
+      co.y += co.vy;
+      co.vx *= CORPSE_VEL_DECAY;
+      co.vy *= CORPSE_VEL_DECAY;
+      co.actor.pos = new Vector(co.x, co.y);
     }
   };
 });
