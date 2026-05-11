@@ -34,6 +34,22 @@ npm run dev
 
 Then open `http://localhost:5173` in your browser if it doesn't open on its own.
 
+### Testing on a phone (same WiFi)
+
+Expose the server on your local network:
+
+```
+npm run dev -- --host
+```
+
+Vite will print a `Network:` URL like `http://192.168.x.x:5173/SimpleZombie/` — open that on your phone.
+
+**First time only** — allow port 5173 through Windows Firewall (run in an admin PowerShell):
+
+```
+netsh advfirewall firewall add rule name="Vite Dev Server" dir=in action=allow protocol=TCP localport=5173
+```
+
 ## Run (preview the built version)
 
 To preview the production build instead of the dev version:

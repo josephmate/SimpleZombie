@@ -62,6 +62,9 @@ let mouseWorldY = 0;
 const IS_MOBILE = !window.matchMedia('(pointer: fine)').matches;
 let joystickDx = 0;
 let joystickDy = 0;
+let fireJoyDx = 0;  // fire joystick direction (unit-ish, from nipplejs)
+let fireJoyDy = 0;
+let mobileFireActive = false; // true while fire stick is being held
 
 if (IS_MOBILE) {
   const zone = document.getElementById('joystick-zone') as HTMLElement;
@@ -80,6 +83,26 @@ if (IS_MOBILE) {
   manager.on('end', () => {
     joystickDx = 0;
     joystickDy = 0;
+  });
+
+  const fireZone = document.getElementById('fire-zone') as HTMLElement;
+  const fireManager = nipplejs.create({
+    zone: fireZone,
+    mode: 'static',
+    position: { left: '50%', top: '50%' },
+    color: 'red',
+    size: 100,
+  });
+  fireManager.on('move', (evt) => {
+    const v = evt.data.vector;
+    fireJoyDx = v.x;
+    fireJoyDy = -v.y; // nipplejs y is inverted vs screen
+    mobileFireActive = true;
+  });
+  fireManager.on('end', () => {
+    fireJoyDx = 0;
+    fireJoyDy = 0;
+    mobileFireActive = false;
   });
 }
 
@@ -341,7 +364,7 @@ game.start().then(() => {
     const vp = cam.viewport;
     hudActor.pos = new Vector(vp.left + HUD_W / 2 + 8, vp.bottom - HUD_H / 2 - 8);
 
-    // ── Shooting (PC only) ────────────────────────────────────────────────
+    // ── Shooting (PC only) ────────────────────────────────────
     if (!IS_MOBILE) {
       // R key: manual reload
       if (game.input.keyboard.wasPressed(Keys.R) && !reloading && bFired > 0) {
@@ -439,6 +462,97 @@ game.start().then(() => {
           if (bul.x >= co.x - half && bul.x <= co.x + half &&
               bul.y >= co.y - half && bul.y <= co.y + half) {
             // Jiggle the corpse slightly in the bullet's direction
+            co.vx += bul.vx * 0.4;
+            co.vy += bul.vy * 0.4;
+            bullets.splice(i, 1);
+            hit = true;
+            break;
+          }
+        }
+        if (hit) continue;
+      }
+    }
+
+    // ── Shooting (mobile fire joystick) ──────────────────────────────────
+    if (IS_MOBILE) {
+      bTime++;
+
+      if (mobileFireActive) {
+        if (bTime >= SHOT_DELAY && bFired < CLIP_SIZE) {
+          const len = Math.sqrt(fireJoyDx * fireJoyDx + fireJoyDy * fireJoyDy);
+          if (len > 0.1) {
+            const spreadMax = fireTime / 400;
+            const spread = randFloat(-spreadMax, spreadMax);
+            const angle = Math.atan2(fireJoyDy, fireJoyDx) + spread;
+            const speed = BULLET_SPEED * randFloat(0.95, 1.05);
+            bullets.push({
+              x:  playerX,
+              y:  playerY,
+              vx: speed * Math.cos(angle),
+              vy: speed * Math.sin(angle),
+              age: 0,
+            });
+          }
+          bTime = 0;
+          bFired++;
+          fireTime = Math.min(fireTime + RECOIL_GROWTH_SPEED, RECOIL_MAX);
+
+          if (bFired >= CLIP_SIZE) {
+            reloading = true;
+            reloadTimer = 0;
+            fireTime = 0;
+          }
+        }
+      } else {
+        if (fireTime > 0) fireTime = Math.max(0, fireTime - RECOIL_DECAY_SPEED);
+      }
+
+      // Reload tick (auto only — no manual reload on mobile)
+      if (reloading) {
+        reloadTimer++;
+        if (reloadTimer >= RELOAD_TIME) {
+          reloading = false;
+          reloadTimer = 0;
+          bFired = 0;
+        }
+      }
+
+      // Bullet movement + hit detection (same as PC)
+      for (let i = bullets.length - 1; i >= 0; i--) {
+        const bul = bullets[i];
+        bul.x += bul.vx;
+        bul.y += bul.vy;
+        bul.age++;
+
+        if (bul.age >= BULLET_LIFETIME ||
+            bul.x < 0 || bul.x > GRID_W ||
+            bul.y < 0 || bul.y > GRID_H) {
+          bullets.splice(i, 1);
+          continue;
+        }
+
+        let hit = false;
+        for (let j = beings.length - 1; j >= 0; j--) {
+          const be = beings[j];
+          const HIT_R = (be.type === 'zombie' ? ZOMBIE_RADIUS : CIVILIAN_RADIUS) + 4;
+          if (dist2(bul.x, bul.y, be.x, be.y) < HIT_R * HIT_R ||
+              dist2(bul.x - bul.vx / 2, bul.y - bul.vy / 2, be.x, be.y) < HIT_R * HIT_R) {
+            be.hp -= BULLET_DAMAGE;
+            bullets.splice(i, 1);
+            hit = true;
+            if (be.hp <= 0) {
+              corpses.push(killBeing(scene, beings, j));
+            }
+            break;
+          }
+        }
+        if (hit) continue;
+
+        for (let j = corpses.length - 1; j >= 0; j--) {
+          const co = corpses[j];
+          const half = CORPSE_SIZE / 2;
+          if (bul.x >= co.x - half && bul.x <= co.x + half &&
+              bul.y >= co.y - half && bul.y <= co.y + half) {
             co.vx += bul.vx * 0.4;
             co.vy += bul.vy * 0.4;
             bullets.splice(i, 1);
