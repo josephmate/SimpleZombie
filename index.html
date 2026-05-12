@@ -115,24 +115,5 @@
     <div id="joystick-zone"></div>
     <div id="fire-zone"></div>
     <script type="module" src="/src/main.ts"></script>
-    <script>
-      (function () {
-        var grid = document.getElementById('levels-grid');
-        for (var i = 1; i <= 10; i++) {
-          var n = Math.pow(2, i - 1);
-          var btn = document.createElement('button');
-          btn.innerHTML =
-            '<span class="lvl-num">Level ' + i + '</span>' +
-            '<span class="lvl-info">&#x1F9DF; ' + n + '<br>&#x1F6B6; ' + n + '</span>';
-          btn.onclick = (function (lvl) {
-            return function () {
-              document.getElementById('level-select').style.display = 'none';
-              window.__startLevel(lvl);
-            };
-          })(i);
-          grid.appendChild(btn);
-        }
-      })();
-    </script>
   </body>
 </html>

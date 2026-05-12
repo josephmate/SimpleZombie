@@ -1,3 +1,4 @@
+﻿/// <reference types="vite/client" />
 import {
   Engine,
   DisplayMode,
@@ -35,6 +36,41 @@ interface Corpse {
 }
 
 const corpses: Corpse[] = [];
+
+// ── Wall system ───────────────────────────────────────────────────────────────
+const CELL_SIZE = 40;
+const WALL_COLOR_STR = '#8B4513'; // saddle brown
+
+interface Wall { col: number; row: number; }
+const walls: Wall[] = [];
+const wallSet = new Set<number>();
+
+function wallKey(c: number, r: number): number { return c * 10000 + r; }
+function isWallCell(c: number, r: number): boolean { return wallSet.has(wallKey(c, r)); }
+
+/** True if a circle at (px,py) with given radius overlaps any wall cell. */
+function circleOverlapsWall(px: number, py: number, radius: number): boolean {
+  const c0 = Math.floor((px - radius) / CELL_SIZE);
+  const c1 = Math.floor((px + radius) / CELL_SIZE);
+  const r0 = Math.floor((py - radius) / CELL_SIZE);
+  const r1 = Math.floor((py + radius) / CELL_SIZE);
+  for (let c = c0; c <= c1; c++) {
+    for (let r = r0; r <= r1; r++) {
+      if (!isWallCell(c, r)) continue;
+      const wx = c * CELL_SIZE, wy = r * CELL_SIZE;
+      const nearX = clamp(px, wx, wx + CELL_SIZE);
+      const nearY = clamp(py, wy, wy + CELL_SIZE);
+      const dx = px - nearX, dy = py - nearY;
+      if (dx * dx + dy * dy < radius * radius) return true;
+    }
+  }
+  return false;
+}
+
+/** True if the point (px,py) sits inside a wall cell. */
+function pointInWall(px: number, py: number): boolean {
+  return isWallCell(Math.floor(px / CELL_SIZE), Math.floor(py / CELL_SIZE));
+}
 
 interface Bullet {
   x: number;
@@ -240,18 +276,75 @@ function killBeing(beings: Being[], idx: number): Corpse {
   return makeCorpse(be.x, be.y, colorStr);
 }
 
-// ── Level start ─────────────────────────────────────────────────────────────
-// Level n spawns 2^(n-1) zombies and 2^(n-1) civilians (placeholder).
+// ── Level maps — loaded at runtime from public/levels/level01.txt … ──────────
+let LEVEL_MAPS: string[][] = [];
+
+// ── Rebuild level-select grid with accurate counts from LEVEL_MAPS ────────────
+function buildLevelSelect(): void {
+  const levelsGrid = document.getElementById('levels-grid');
+  if (!levelsGrid) return;
+  levelsGrid.innerHTML = '';
+  LEVEL_MAPS.forEach((map, i) => {
+    let z = 0, c = 0;
+    for (const row of map) for (const ch of row) {
+      if (ch === 'Z') z++; else if (ch === 'C') c++;
+    }
+    const btn = document.createElement('button');
+    btn.innerHTML =
+      `<span class="lvl-num">Level ${i + 1}</span>` +
+      `<span class="lvl-info">\u{1F9DF} ${z}<br>\u{1F6B6} ${c}</span>`;
+    btn.onclick = () => {
+      const overlay = document.getElementById('level-select');
+      if (overlay) overlay.style.display = 'none';
+      (window as any).__startLevel(i + 1);
+    };
+    levelsGrid.appendChild(btn);
+  });
+}
+
+// ── Level start ───────────────────────────────────────────────────────────────
 function startLevel(level: number): void {
-  const count = Math.pow(2, level - 1);
-  for (let i = 0; i < count; i++) {
-    const p = randPos();
-    beings.push(makeBeing('zombie', p.x, p.y));
+  // Clear previous state
+  beings.length = 0;
+  corpses.length = 0;
+  for (const b of bullets) b.actor.kill();
+  bullets.length = 0;
+  bFired = 0; bTime = SHOT_DELAY; reloading = false; reloadTimer = 0; fireTime = 0;
+  walls.length = 0;
+  wallSet.clear();
+
+  const map = LEVEL_MAPS[Math.min(level - 1, LEVEL_MAPS.length - 1)];
+  let playerSpawned = false;
+
+  for (let row = 0; row < map.length; row++) {
+    const rowStr = map[row];
+    for (let col = 0; col < rowStr.length; col++) {
+      const ch = rowStr[col];
+      const cx = col * CELL_SIZE + CELL_SIZE / 2;
+      const cy = row * CELL_SIZE + CELL_SIZE / 2;
+      switch (ch) {
+        case 'W':
+          walls.push({ col, row });
+          wallSet.add(wallKey(col, row));
+          break;
+        case 'Z': beings.push(makeBeing('zombie', cx, cy)); break;
+        case 'C': beings.push(makeBeing('human',  cx, cy)); break;
+        case 'z': corpses.push(makeCorpse(cx, cy, ZOMBIE_COLOR_STR));   break;
+        case 'c': corpses.push(makeCorpse(cx, cy, CIVILIAN_COLOR_STR)); break;
+        case 'P':
+          playerX = cx; playerY = cy;
+          playerActor.pos.x = cx; playerActor.pos.y = cy;
+          playerSpawned = true;
+          break;
+      }
+    }
   }
-  for (let i = 0; i < count; i++) {
-    const p = randPos();
-    beings.push(makeBeing('human', p.x, p.y));
+
+  if (!playerSpawned) {
+    playerX = GRID_W / 2; playerY = GRID_H / 2;
+    playerActor.pos.x = playerX; playerActor.pos.y = playerY;
   }
+
 
 // ── Scene ─────────────────────────────────────────────────────────────────────
 game.start().then(() => {
@@ -268,6 +361,23 @@ game.start().then(() => {
   }
 
   scene.add(playerActor);
+
+  // ── Wall canvas (static geometry, redraws each frame from walls[]) ─────────
+  const wallActor = new Actor({ x: GRID_W / 2, y: GRID_H / 2, z: 1 });
+  const wallCanvas = new Canvas({
+    width: GRID_W,
+    height: GRID_H,
+    cache: false,
+    draw(ctx) {
+      ctx.clearRect(0, 0, GRID_W, GRID_H);
+      ctx.fillStyle = WALL_COLOR_STR;
+      for (const w of walls) {
+        ctx.fillRect(w.col * CELL_SIZE, w.row * CELL_SIZE, CELL_SIZE, CELL_SIZE);
+      }
+    },
+  });
+  wallActor.graphics.use(wallCanvas);
+  scene.add(wallActor);
 
   // ── Beings+corpses canvas (one actor replaces 50+ individual actors) ───────
   const beingsActor = new Actor({ x: GRID_W / 2, y: GRID_H / 2, z: 3 });
@@ -342,8 +452,19 @@ game.start().then(() => {
       if (game.input.keyboard.isHeld(Keys.A)) pdx -= PLAYER_SPEED;
       if (game.input.keyboard.isHeld(Keys.D)) pdx += PLAYER_SPEED;
     }
-    playerX = clamp(playerX + pdx, 0, GRID_W);
-    playerY = clamp(playerY + pdy, 0, GRID_H);
+    {
+      const nx = clamp(playerX + pdx, 0, GRID_W);
+      const ny = clamp(playerY + pdy, 0, GRID_H);
+      if (!circleOverlapsWall(nx, ny, PLAYER_RADIUS)) {
+        playerX = nx; playerY = ny;
+      } else {
+        // Try sliding along each axis separately
+        const nx2 = clamp(playerX + pdx, 0, GRID_W);
+        if (!circleOverlapsWall(nx2, playerY, PLAYER_RADIUS)) playerX = nx2;
+        const ny2 = clamp(playerY + pdy, 0, GRID_H);
+        if (!circleOverlapsWall(playerX, ny2, PLAYER_RADIUS)) playerY = ny2;
+      }
+    }
     playerActor.pos.x = playerX;
     playerActor.pos.y = playerY;
 
@@ -424,10 +545,11 @@ game.start().then(() => {
         bul.actor.pos.x = bul.x;
         bul.actor.pos.y = bul.y;
 
-        // Remove if out of bounds or expired
+        // Remove if out of bounds, expired, or hit a wall
         if (bul.age >= BULLET_LIFETIME ||
             bul.x < 0 || bul.x > GRID_W ||
-            bul.y < 0 || bul.y > GRID_H) {
+            bul.y < 0 || bul.y > GRID_H ||
+            pointInWall(bul.x, bul.y)) {
           removeBullet(i);
           continue;
         }
@@ -527,7 +649,8 @@ game.start().then(() => {
 
         if (bul.age >= BULLET_LIFETIME ||
             bul.x < 0 || bul.x > GRID_W ||
-            bul.y < 0 || bul.y > GRID_H) {
+            bul.y < 0 || bul.y > GRID_H ||
+            pointInWall(bul.x, bul.y)) {
           removeBullet(i);
           continue;
         }
@@ -640,11 +763,20 @@ game.start().then(() => {
         }
       }
 
-      // Always apply velocity
+      // Always apply velocity (with wall collision)
       const vx = b.speed * Math.cos(b.angle);
       const vy = b.speed * Math.sin(b.angle);
-      b.x = clamp(b.x + vx, 0, GRID_W);
-      b.y = clamp(b.y + vy, 0, GRID_H);
+      const brad = b.type === 'zombie' ? ZOMBIE_RADIUS : CIVILIAN_RADIUS;
+      const nx = clamp(b.x + vx, 0, GRID_W);
+      const ny = clamp(b.y + vy, 0, GRID_H);
+      if (!circleOverlapsWall(nx, ny, brad)) {
+        b.x = nx; b.y = ny;
+      } else {
+        // Try sliding; if still blocked, reverse heading
+        if (!circleOverlapsWall(nx, b.y, brad)) { b.x = nx; }
+        else if (!circleOverlapsWall(b.x, ny, brad)) { b.y = ny; }
+        else { b.angle = wrapAngle(b.angle + Math.PI + randFloat(-0.5, 0.5)); }
+      }
     }
 
     // ── Handle infections (convert humans to zombies) ─────────────────────
@@ -668,4 +800,20 @@ game.start().then(() => {
 });
 }
 
-(window as any).__startLevel = startLevel;
+// ── Fetch all level txt files, then wire up the game ────────────────────────
+(async () => {
+  const base = import.meta.env.BASE_URL; // '/SimpleZombie/' in both dev and prod
+  const NUM_LEVELS = 10;
+  const texts = await Promise.all(
+    Array.from({ length: NUM_LEVELS }, (_, i) => {
+      const n = String(i + 1).padStart(2, '0');
+      return fetch(`${base}levels/level${n}.txt`).then(r => {
+        if (!r.ok) throw new Error(`Failed to load level${n}.txt: ${r.status}`);
+        return r.text();
+      });
+    })
+  );
+  LEVEL_MAPS = texts.map(t => t.split('\n').filter(line => line.length > 0));
+  buildLevelSelect();
+  (window as any).__startLevel = startLevel;
+})();
