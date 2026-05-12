@@ -117,9 +117,6 @@ const HUMAN_MIN_SPEED = 0.8;
 const INFECT_DIST_SQ = 20 * 20;     // zombie infects human when this close
 const ZOMBIE_DAMAGE_DIST_SQ = 16 * 16;
 
-const NUM_ZOMBIES   = IS_MOBILE ? 12 : 20;
-const NUM_CIVILIANS = IS_MOBILE ? 18 : 30;
-
 const ZOMBIE_RADIUS = 10;
 const PLAYER_RADIUS = 12;
 const CIVILIAN_RADIUS = 9;
@@ -243,14 +240,18 @@ function killBeing(beings: Being[], idx: number): Corpse {
   return makeCorpse(be.x, be.y, colorStr);
 }
 
-for (let i = 0; i < NUM_ZOMBIES; i++) {
-  const p = randPos();
-  beings.push(makeBeing('zombie', p.x, p.y));
-}
-for (let i = 0; i < NUM_CIVILIANS; i++) {
-  const p = randPos();
-  beings.push(makeBeing('human', p.x, p.y));
-}
+// ── Level start ─────────────────────────────────────────────────────────────
+// Level n spawns 2^(n-1) zombies and 2^(n-1) civilians (placeholder).
+function startLevel(level: number): void {
+  const count = Math.pow(2, level - 1);
+  for (let i = 0; i < count; i++) {
+    const p = randPos();
+    beings.push(makeBeing('zombie', p.x, p.y));
+  }
+  for (let i = 0; i < count; i++) {
+    const p = randPos();
+    beings.push(makeBeing('human', p.x, p.y));
+  }
 
 // ── Scene ─────────────────────────────────────────────────────────────────────
 game.start().then(() => {
@@ -665,3 +666,6 @@ game.start().then(() => {
     }
   };
 });
+}
+
+(window as any).__startLevel = startLevel;

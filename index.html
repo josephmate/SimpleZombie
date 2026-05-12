@@ -45,11 +45,94 @@
           display: block;
         }
       }
+      /* ── Level select overlay ─────────────────────────────────────────── */
+      #level-select {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.93);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 200;
+        font-family: monospace;
+      }
+      #level-select h1 {
+        font-size: 2rem;
+        color: #90ee90;
+        margin-bottom: 0.4rem;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+      }
+      #level-select .subtitle {
+        color: #aaa;
+        font-size: 0.8rem;
+        margin-bottom: 2rem;
+      }
+      #level-select .levels {
+        display: grid;
+        grid-template-columns: repeat(5, 1fr);
+        gap: 10px;
+        max-width: 580px;
+        width: 92%;
+      }
+      #level-select button {
+        background: #111;
+        border: 2px solid #90ee90;
+        color: #90ee90;
+        padding: 14px 6px;
+        cursor: pointer;
+        font-family: monospace;
+        border-radius: 4px;
+        transition: background 0.12s, color 0.12s;
+      }
+      #level-select button:hover {
+        background: #90ee90;
+        color: #000;
+      }
+      #level-select button .lvl-num {
+        display: block;
+        font-size: 1.1rem;
+        font-weight: bold;
+        margin-bottom: 5px;
+      }
+      #level-select button .lvl-info {
+        display: block;
+        font-size: 0.62rem;
+        opacity: 0.75;
+        line-height: 1.5;
+      }
     </style>
   </head>
   <body>
+    <!-- Level select overlay (placeholder for proper levels) -->
+    <div id="level-select">
+      <h1>Select Level</h1>
+      <p class="subtitle">Placeholder — levels 1–10</p>
+      <div class="levels" id="levels-grid"></div>
+    </div>
+
     <div id="joystick-zone"></div>
     <div id="fire-zone"></div>
     <script type="module" src="/src/main.ts"></script>
+    <script>
+      (function () {
+        var grid = document.getElementById('levels-grid');
+        for (var i = 1; i <= 10; i++) {
+          var n = Math.pow(2, i - 1);
+          var btn = document.createElement('button');
+          btn.innerHTML =
+            '<span class="lvl-num">Level ' + i + '</span>' +
+            '<span class="lvl-info">&#x1F9DF; ' + n + '<br>&#x1F6B6; ' + n + '</span>';
+          btn.onclick = (function (lvl) {
+            return function () {
+              document.getElementById('level-select').style.display = 'none';
+              window.__startLevel(lvl);
+            };
+          })(i);
+          grid.appendChild(btn);
+        }
+      })();
+    </script>
   </body>
 </html>
