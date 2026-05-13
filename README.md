@@ -109,3 +109,6 @@ Then open `http://localhost:4173` in your browser.
    2. hitting civ
 10. level editor that produces the ascii file
 11. support opening a remote json file with the levels config so others can share
+12. speed running options
+    1.  timer for each level
+    2.  timer from start to finish
