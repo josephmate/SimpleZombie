@@ -9,6 +9,7 @@ import {
   Canvas,
 } from 'excalibur';
 import { InputHandler, IS_MOBILE } from './InputHandler';
+import { LevelLoader, LevelData, CELL_SIZE } from './LevelLoader';
 
 // ── Bullet system ─────────────────────────────────────────────────────────────
 const BULLET_SPEED      = 14;   // px per frame
@@ -38,7 +39,7 @@ interface Corpse {
 const corpses: Corpse[] = [];
 
 // ── Wall system ───────────────────────────────────────────────────────────────
-const CELL_SIZE = 40;
+// CELL_SIZE imported from LevelLoader
 const WALL_COLOR_STR = '#8B4513'; // saddle brown
 
 interface Wall { col: number; row: number; }
@@ -236,27 +237,23 @@ function killBeing(beings: Being[], idx: number): Corpse {
   return makeCorpse(be.x, be.y, colorStr);
 }
 
-// ── Level maps — loaded at runtime from public/levels/level01.txt … ──────────
-let LEVEL_MAPS: string[][] = [];
+// ── Level loading ─────────────────────────────────────────────────────────────
+const levelLoader = new LevelLoader();
 
-// ── Rebuild level-select grid with accurate counts from LEVEL_MAPS ────────────
+// ── Level-select screen ────────────────────────────────────────────────────────────
 function buildLevelSelect(): void {
   const levelsGrid = document.getElementById('levels-grid');
   if (!levelsGrid) return;
   levelsGrid.innerHTML = '';
-  LEVEL_MAPS.forEach((map, i) => {
-    let z = 0, c = 0;
-    for (const row of map) for (const ch of row) {
-      if (ch === 'Z') z++; else if (ch === 'C') c++;
-    }
+  levelLoader.getAllLevels().forEach(summary => {
     const btn = document.createElement('button');
     btn.innerHTML =
-      `<span class="lvl-num">Level ${i + 1}</span>` +
-      `<span class="lvl-info">\u{1F9DF} ${z}<br>\u{1F6B6} ${c}</span>`;
+      `<span class="lvl-num">${summary.name}</span>` +
+      `<span class="lvl-info">\u{1F9DF} ${summary.zombieCount}<br>\u{1F6B6} ${summary.civilianCount}</span>`;
     btn.onclick = () => {
       const overlay = document.getElementById('level-select');
       if (overlay) overlay.style.display = 'none';
-      (window as any).__startLevel(i + 1);
+      (window as any).__startLevel(summary.id);
     };
     levelsGrid.appendChild(btn);
   });
@@ -273,37 +270,25 @@ function startLevel(level: number): void {
   walls.length = 0;
   wallSet.clear();
 
-  const map = LEVEL_MAPS[Math.min(level - 1, LEVEL_MAPS.length - 1)];
-  let playerSpawned = false;
+  const levelData: LevelData = levelLoader.getLevel(level);
 
-  for (let row = 0; row < map.length; row++) {
-    const rowStr = map[row];
-    for (let col = 0; col < rowStr.length; col++) {
-      const ch = rowStr[col];
-      const cx = col * CELL_SIZE + CELL_SIZE / 2;
-      const cy = row * CELL_SIZE + CELL_SIZE / 2;
-      switch (ch) {
-        case 'W':
-          walls.push({ col, row });
-          wallSet.add(wallKey(col, row));
-          break;
-        case 'Z': beings.push(makeBeing('zombie', cx, cy)); break;
-        case 'C': beings.push(makeBeing('human',  cx, cy)); break;
-        case 'z': corpses.push(makeCorpse(cx, cy, ZOMBIE_COLOR_STR));   break;
-        case 'c': corpses.push(makeCorpse(cx, cy, CIVILIAN_COLOR_STR)); break;
-        case 'P':
-          playerX = cx; playerY = cy;
-          playerActor.pos.x = cx; playerActor.pos.y = cy;
-          playerSpawned = true;
-          break;
-      }
-    }
+  for (const w of levelData.walls) {
+    walls.push(w);
+    wallSet.add(wallKey(w.col, w.row));
+  }
+  for (const s of levelData.beings) {
+    beings.push(makeBeing(s.type, s.x, s.y));
+  }
+  for (const s of levelData.corpses) {
+    corpses.push(makeCorpse(s.x, s.y, s.color));
   }
 
-  if (!playerSpawned) {
+  if (levelData.playerStart) {
+    playerX = levelData.playerStart.x; playerY = levelData.playerStart.y;
+  } else {
     playerX = GRID_W / 2; playerY = GRID_H / 2;
-    playerActor.pos.x = playerX; playerActor.pos.y = playerY;
   }
+  playerActor.pos.x = playerX; playerActor.pos.y = playerY;
 
 
 // ── Scene ─────────────────────────────────────────────────────────────────────
@@ -644,20 +629,10 @@ game.start().then(() => {
 });
 }
 
-// ── Fetch all level txt files, then wire up the game ────────────────────────
+// ── Bootstrap: load levels then wire up the game ────────────────────────────────
 (async () => {
   const base = import.meta.env.BASE_URL; // '/SimpleZombie/' in both dev and prod
-  const NUM_LEVELS = 10;
-  const texts = await Promise.all(
-    Array.from({ length: NUM_LEVELS }, (_, i) => {
-      const n = String(i + 1).padStart(2, '0');
-      return fetch(`${base}levels/level${n}.txt`).then(r => {
-        if (!r.ok) throw new Error(`Failed to load level${n}.txt: ${r.status}`);
-        return r.text();
-      });
-    })
-  );
-  LEVEL_MAPS = texts.map(t => t.split('\n').filter(line => line.length > 0));
+  await levelLoader.load(base);
   buildLevelSelect();
   (window as any).__startLevel = startLevel;
 })();
