@@ -6,10 +6,9 @@ import {
   Actor,
   Circle,
   Vector,
-  Keys,
   Canvas,
 } from 'excalibur';
-import nipplejs from 'nipplejs';
+import { InputHandler, IS_MOBILE } from './InputHandler';
 
 // ── Bullet system ─────────────────────────────────────────────────────────────
 const BULLET_SPEED      = 14;   // px per frame
@@ -100,60 +99,6 @@ let bTime      = SHOT_DELAY; // frames since last shot (start ready)
 let reloading  = false;
 let reloadTimer = 0;
 let fireTime   = 0;        // accumulated recoil
-let mouseDown  = false;
-let mouseWorldX = 0;
-let mouseWorldY = 0;
-
-// ── Mobile detection & joystick state ────────────────────────────────────────
-const IS_MOBILE = !window.matchMedia('(pointer: fine)').matches;
-let joystickDx = 0;
-let joystickDy = 0;
-let fireJoyDx = 0;  // fire joystick direction (unit-ish, from nipplejs)
-let fireJoyDy = 0;
-let mobileFireActive = false; // true while fire stick is being held
-
-if (IS_MOBILE) {
-  const zone = document.getElementById('joystick-zone') as HTMLElement;
-  const manager = nipplejs.create({
-    zone,
-    mode: 'static',
-    position: { left: '50%', top: '50%' },
-    color: 'white',
-    size: 100,
-  });
-  manager.on('move', (evt) => {
-    const v = evt.data.vector;
-    joystickDx = v.x;
-    joystickDy = -v.y; // nipplejs y is inverted vs screen
-  });
-  manager.on('end', () => {
-    joystickDx = 0;
-    joystickDy = 0;
-  });
-
-  const fireZone = document.getElementById('fire-zone') as HTMLElement;
-  const fireManager = nipplejs.create({
-    zone: fireZone,
-    mode: 'static',
-    position: { left: '50%', top: '50%' },
-    color: 'red',
-    size: 100,
-  });
-  fireManager.on('move', (evt) => {
-    const v = evt.data.vector;
-    fireJoyDx = v.x;
-    fireJoyDy = -v.y; // nipplejs y is inverted vs screen
-    mobileFireActive = true;
-  });
-  fireManager.on('end', () => {
-    fireJoyDx = 0;
-    fireJoyDy = 0;
-    mobileFireActive = false;
-  });
-}
-
-// PC mouse input is registered after game.start() using Excalibur's pointer system
-
 // ── Constants ──────────────────────────────────────────────────────────────────
 const GRID_W = 1200;
 const GRID_H = 900;
@@ -241,6 +186,8 @@ const game = new Engine({
   // backing canvas 4–9× larger, killing fill-rate performance.
   pixelRatio: IS_MOBILE ? 1 : Math.min(window.devicePixelRatio, 2),
 });
+
+const inputHandler = new InputHandler(game);
 
 // Player actor (blue star drawn via Canvas)
 const playerActor = new Actor({ x: 0, y: 0, z: 10 });
@@ -363,15 +310,7 @@ function startLevel(level: number): void {
 game.start().then(() => {
   const scene = game.currentScene;
 
-  // ── PC mouse input via Excalibur (gives worldPos accounting for camera/scale) ──
-  if (!IS_MOBILE) {
-    game.input.pointers.primary.on('down', () => { mouseDown = true; });
-    game.input.pointers.primary.on('up',   () => { mouseDown = false; });
-    game.input.pointers.primary.on('move', (evt) => {
-      mouseWorldX = evt.worldPos.x;
-      mouseWorldY = evt.worldPos.y;
-    });
-  }
+  inputHandler.setupPointers();
 
   scene.add(playerActor);
 
@@ -454,18 +393,11 @@ game.start().then(() => {
 
   // ── Update loop ──────────────────────────────────────────────────────────
   scene.onPreUpdate = (_eng, _delta) => {
-    // ── Player movement (WASD on desktop, nipplejs on mobile) ───────────────
+    // ── Player movement ──────────────────────────────────────────────────────────────────
+    const inputs = inputHandler.getInputs(playerX, playerY);
     const playerSlow = circleOverlapsCorpse(playerX, playerY, PLAYER_RADIUS) ? CORPSE_SLOW : 1;
-    let pdx = 0, pdy = 0;
-    if (IS_MOBILE) {
-      pdx = joystickDx * PLAYER_SPEED * playerSlow;
-      pdy = joystickDy * PLAYER_SPEED * playerSlow;
-    } else {
-      if (game.input.keyboard.isHeld(Keys.W)) pdy -= PLAYER_SPEED * playerSlow;
-      if (game.input.keyboard.isHeld(Keys.S)) pdy += PLAYER_SPEED * playerSlow;
-      if (game.input.keyboard.isHeld(Keys.A)) pdx -= PLAYER_SPEED * playerSlow;
-      if (game.input.keyboard.isHeld(Keys.D)) pdx += PLAYER_SPEED * playerSlow;
-    }
+    const pdx = inputs.dx * PLAYER_SPEED * playerSlow;
+    const pdy = inputs.dy * PLAYER_SPEED * playerSlow;
     {
       const nx = clamp(playerX + pdx, 0, GRID_W);
       const ny = clamp(playerY + pdy, 0, GRID_H);
@@ -488,219 +420,116 @@ game.start().then(() => {
     hudActor.pos.x = vp.left + HUD_W / 2 + 8;
     hudActor.pos.y = vp.bottom - HUD_H / 2 - 8;
 
-    // ── Shooting (PC only) ────────────────────────────────────
-    if (!IS_MOBILE) {
-      // R key: manual reload
-      if (game.input.keyboard.wasPressed(Keys.R) && !reloading && bFired > 0) {
-        reloading = true;
+    // ── Shooting ──────────────────────────────────────────────────────────────
+    // Manual reload
+    if (inputs.reloadRequested && !reloading && bFired > 0) {
+      reloading = true;
+      reloadTimer = 0;
+      fireTime = 0;
+    }
+
+    // Reload tick
+    if (reloading) {
+      reloadTimer++;
+      if (reloadTimer >= RELOAD_TIME) {
+        reloading = false;
         reloadTimer = 0;
-        fireTime = 0;
-      }
-
-      // Reload tick
-      if (reloading) {
-        reloadTimer++;
-        if (reloadTimer >= RELOAD_TIME) {
-          reloading = false;
-          reloadTimer = 0;
-          bFired = 0;
-        }
-      }
-
-      bTime++;
-
-      if (mouseDown && !reloading) {
-        if (bTime >= SHOT_DELAY && bFired < CLIP_SIZE) {
-          // Direction from player to mouse (world coords)
-          const dx = mouseWorldX - playerX;
-          const dy = mouseWorldY - playerY;
-          const len = Math.sqrt(dx * dx + dy * dy);
-          if (len > 0.001) {
-            // Apply recoil spread (like zombie4: random in [-fireTime/400, fireTime/400])
-            const spreadMax = fireTime / 400;
-            const spread = randFloat(-spreadMax, spreadMax);
-            const angle = Math.atan2(dy, dx) + spread;
-            const speed = BULLET_SPEED * randFloat(0.95, 1.05);
-            const bActor = new Actor({ x: playerX, y: playerY, z: 8 });
-            bActor.graphics.use(new Circle({ radius: 2, color: Color.fromHex('#2a1a0a') }));
-            scene.add(bActor);
-            bullets.push({
-              x:  playerX,
-              y:  playerY,
-              vx: speed * Math.cos(angle),
-              vy: speed * Math.sin(angle),
-              age: 0,
-              actor: bActor,
-            });
-          }
-
-          bTime = 0;
-          bFired++;
-          fireTime = Math.min(fireTime + RECOIL_GROWTH_SPEED, RECOIL_MAX);
-
-          // Auto-reload when clip exhausted
-          if (bFired >= CLIP_SIZE) {
-            reloading = true;
-            reloadTimer = 0;
-            fireTime = 0;
-          }
-        }
-      } else {
-        // Decay recoil when not shooting
-        if (fireTime > 0) fireTime = Math.max(0, fireTime - RECOIL_DECAY_SPEED);
-      }
-
-      // ── Bullet movement + zombie hit detection ──────────────────────────
-      for (let i = bullets.length - 1; i >= 0; i--) {
-        const bul = bullets[i];
-        bul.x += bul.vx;
-        bul.y += bul.vy;
-        bul.age++;
-        bul.actor.pos.x = bul.x;
-        bul.actor.pos.y = bul.y;
-
-        // Remove if out of bounds, expired, or hit a wall
-        if (bul.age >= BULLET_LIFETIME ||
-            bul.x < 0 || bul.x > GRID_W ||
-            bul.y < 0 || bul.y > GRID_H ||
-            pointInWall(bul.x, bul.y)) {
-          removeBullet(i);
-          continue;
-        }
-
-        // Check hit against beings (zombies and civilians)
-        let hit = false;
-        for (let j = beings.length - 1; j >= 0; j--) {
-          const be = beings[j];
-          const HIT_R = (be.type === 'zombie' ? ZOMBIE_RADIUS : CIVILIAN_RADIUS) + 4;
-          if (dist2(bul.x, bul.y, be.x, be.y) < HIT_R * HIT_R ||
-              dist2(bul.x - bul.vx / 2, bul.y - bul.vy / 2, be.x, be.y) < HIT_R * HIT_R) {
-            be.hp -= BULLET_DAMAGE;
-            removeBullet(i);
-            hit = true;
-            if (be.hp <= 0) {
-              corpses.push(killBeing(beings, j));
-            }
-            break;
-          }
-        }
-        if (hit) continue;
-
-        // Check hit against corpses (bullets stop on corpses)
-        for (let j = corpses.length - 1; j >= 0; j--) {
-          const co = corpses[j];
-          const half = CORPSE_SIZE / 2;
-          if (bul.x >= co.x - half && bul.x <= co.x + half &&
-              bul.y >= co.y - half && bul.y <= co.y + half) {
-            // Jiggle the corpse slightly in the bullet's direction
-            co.vx += bul.vx * 0.4;
-            co.vy += bul.vy * 0.4;
-            removeBullet(i);
-            hit = true;
-            break;
-          }
-        }
-        if (hit) continue;
+        bFired = 0;
       }
     }
 
-    // ── Shooting (mobile fire joystick) ──────────────────────────────────
-    if (IS_MOBILE) {
-      bTime++;
+    bTime++;
 
-      if (mobileFireActive) {
-        if (bTime >= SHOT_DELAY && bFired < CLIP_SIZE) {
-          const len = Math.sqrt(fireJoyDx * fireJoyDx + fireJoyDy * fireJoyDy);
-          if (len > 0.1) {
-            const spreadMax = fireTime / 400;
-            const spread = randFloat(-spreadMax, spreadMax);
-            const angle = Math.atan2(fireJoyDy, fireJoyDx) + spread;
-            const speed = BULLET_SPEED * randFloat(0.95, 1.05);
-            const bActor = new Actor({ x: playerX, y: playerY, z: 8 });
-            bActor.graphics.use(new Circle({ radius: 2, color: Color.fromHex('#2a1a0a') }));
-            scene.add(bActor);
-            bullets.push({
-              x:  playerX,
-              y:  playerY,
-              vx: speed * Math.cos(angle),
-              vy: speed * Math.sin(angle),
-              age: 0,
-              actor: bActor,
-            });
-          }
-          bTime = 0;
-          bFired++;
-          fireTime = Math.min(fireTime + RECOIL_GROWTH_SPEED, RECOIL_MAX);
-
-          if (bFired >= CLIP_SIZE) {
-            reloading = true;
-            reloadTimer = 0;
-            fireTime = 0;
-          }
+    if (inputs.isShooting && !reloading) {
+      if (bTime >= SHOT_DELAY && bFired < CLIP_SIZE) {
+        const len = Math.sqrt(inputs.shootDx * inputs.shootDx + inputs.shootDy * inputs.shootDy);
+        if (len > 0.001) {
+          // Apply recoil spread
+          const spreadMax = fireTime / 400;
+          const spread = randFloat(-spreadMax, spreadMax);
+          const angle = Math.atan2(inputs.shootDy, inputs.shootDx) + spread;
+          const speed = BULLET_SPEED * randFloat(0.95, 1.05);
+          const bActor = new Actor({ x: playerX, y: playerY, z: 8 });
+          bActor.graphics.use(new Circle({ radius: 2, color: Color.fromHex('#2a1a0a') }));
+          scene.add(bActor);
+          bullets.push({
+            x:  playerX,
+            y:  playerY,
+            vx: speed * Math.cos(angle),
+            vy: speed * Math.sin(angle),
+            age: 0,
+            actor: bActor,
+          });
         }
-      } else {
-        if (fireTime > 0) fireTime = Math.max(0, fireTime - RECOIL_DECAY_SPEED);
-      }
+        bTime = 0;
+        bFired++;
+        fireTime = Math.min(fireTime + RECOIL_GROWTH_SPEED, RECOIL_MAX);
 
-      // Reload tick (auto only — no manual reload on mobile)
-      if (reloading) {
-        reloadTimer++;
-        if (reloadTimer >= RELOAD_TIME) {
-          reloading = false;
+        // Auto-reload when clip exhausted
+        if (bFired >= CLIP_SIZE) {
+          reloading = true;
           reloadTimer = 0;
-          bFired = 0;
+          fireTime = 0;
         }
       }
-
-      // Bullet movement + hit detection (same as PC)
-      for (let i = bullets.length - 1; i >= 0; i--) {
-        const bul = bullets[i];
-        bul.x += bul.vx;
-        bul.y += bul.vy;
-        bul.age++;
-        bul.actor.pos.x = bul.x;
-        bul.actor.pos.y = bul.y;
-
-        if (bul.age >= BULLET_LIFETIME ||
-            bul.x < 0 || bul.x > GRID_W ||
-            bul.y < 0 || bul.y > GRID_H ||
-            pointInWall(bul.x, bul.y)) {
-          removeBullet(i);
-          continue;
-        }
-
-        let hit = false;
-        for (let j = beings.length - 1; j >= 0; j--) {
-          const be = beings[j];
-          const HIT_R = (be.type === 'zombie' ? ZOMBIE_RADIUS : CIVILIAN_RADIUS) + 4;
-          if (dist2(bul.x, bul.y, be.x, be.y) < HIT_R * HIT_R ||
-              dist2(bul.x - bul.vx / 2, bul.y - bul.vy / 2, be.x, be.y) < HIT_R * HIT_R) {
-            be.hp -= BULLET_DAMAGE;
-            removeBullet(i);
-            hit = true;
-            if (be.hp <= 0) {
-              corpses.push(killBeing(beings, j));
-            }
-            break;
-          }
-        }
-        if (hit) continue;
-
-        for (let j = corpses.length - 1; j >= 0; j--) {
-          const co = corpses[j];
-          const half = CORPSE_SIZE / 2;
-          if (bul.x >= co.x - half && bul.x <= co.x + half &&
-              bul.y >= co.y - half && bul.y <= co.y + half) {
-            co.vx += bul.vx * 0.4;
-            co.vy += bul.vy * 0.4;
-            removeBullet(i);
-            hit = true;
-            break;
-          }
-        }
-        if (hit) continue;
-      }
+    } else {
+      // Decay recoil when not shooting
+      if (fireTime > 0) fireTime = Math.max(0, fireTime - RECOIL_DECAY_SPEED);
     }
+
+    // ── Bullet movement + hit detection ───────────────────────────────────────
+    for (let i = bullets.length - 1; i >= 0; i--) {
+      const bul = bullets[i];
+      bul.x += bul.vx;
+      bul.y += bul.vy;
+      bul.age++;
+      bul.actor.pos.x = bul.x;
+      bul.actor.pos.y = bul.y;
+
+      // Remove if out of bounds, expired, or hit a wall
+      if (bul.age >= BULLET_LIFETIME ||
+          bul.x < 0 || bul.x > GRID_W ||
+          bul.y < 0 || bul.y > GRID_H ||
+          pointInWall(bul.x, bul.y)) {
+        removeBullet(i);
+        continue;
+      }
+
+      // Check hit against beings (zombies and civilians)
+      let hit = false;
+      for (let j = beings.length - 1; j >= 0; j--) {
+        const be = beings[j];
+        const HIT_R = (be.type === 'zombie' ? ZOMBIE_RADIUS : CIVILIAN_RADIUS) + 4;
+        if (dist2(bul.x, bul.y, be.x, be.y) < HIT_R * HIT_R ||
+            dist2(bul.x - bul.vx / 2, bul.y - bul.vy / 2, be.x, be.y) < HIT_R * HIT_R) {
+          be.hp -= BULLET_DAMAGE;
+          removeBullet(i);
+          hit = true;
+          if (be.hp <= 0) {
+            corpses.push(killBeing(beings, j));
+          }
+          break;
+        }
+      }
+      if (hit) continue;
+
+      // Check hit against corpses (bullets stop on corpses)
+      for (let j = corpses.length - 1; j >= 0; j--) {
+        const co = corpses[j];
+        const half = CORPSE_SIZE / 2;
+        if (bul.x >= co.x - half && bul.x <= co.x + half &&
+            bul.y >= co.y - half && bul.y <= co.y + half) {
+          // Jiggle the corpse slightly in the bullet's direction
+          co.vx += bul.vx * 0.4;
+          co.vy += bul.vy * 0.4;
+          removeBullet(i);
+          hit = true;
+          break;
+        }
+      }
+      if (hit) continue;
+    }
+
 
     // ── Beings update (AI runs every AI_THROTTLE frames; movement every frame) ─
     aiFrame++;
