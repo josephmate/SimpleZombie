@@ -26,6 +26,7 @@ const BULLET_DAMAGE     = 34;   // HP per bullet hit
 const BEING_MAX_HP      = 100;
 const CORPSE_SIZE       = 14;   // square side length
 const CORPSE_VEL_DECAY = 0.80; // how fast corpse slide velocity damps
+const CORPSE_SLOW       = 0.35; // speed multiplier when moving over a corpse
 
 interface Corpse {
   x: number;
@@ -70,6 +71,18 @@ function circleOverlapsWall(px: number, py: number, radius: number): boolean {
 /** True if the point (px,py) sits inside a wall cell. */
 function pointInWall(px: number, py: number): boolean {
   return isWallCell(Math.floor(px / CELL_SIZE), Math.floor(py / CELL_SIZE));
+}
+
+/** True if a circle at (px,py) with given radius overlaps any corpse square. */
+function circleOverlapsCorpse(px: number, py: number, radius: number): boolean {
+  const half = CORPSE_SIZE / 2;
+  for (const co of corpses) {
+    const nearX = clamp(px, co.x - half, co.x + half);
+    const nearY = clamp(py, co.y - half, co.y + half);
+    const dx = px - nearX, dy = py - nearY;
+    if (dx * dx + dy * dy < radius * radius) return true;
+  }
+  return false;
 }
 
 interface Bullet {
@@ -442,15 +455,16 @@ game.start().then(() => {
   // ── Update loop ──────────────────────────────────────────────────────────
   scene.onPreUpdate = (_eng, _delta) => {
     // ── Player movement (WASD on desktop, nipplejs on mobile) ───────────────
+    const playerSlow = circleOverlapsCorpse(playerX, playerY, PLAYER_RADIUS) ? CORPSE_SLOW : 1;
     let pdx = 0, pdy = 0;
     if (IS_MOBILE) {
-      pdx = joystickDx * PLAYER_SPEED;
-      pdy = joystickDy * PLAYER_SPEED;
+      pdx = joystickDx * PLAYER_SPEED * playerSlow;
+      pdy = joystickDy * PLAYER_SPEED * playerSlow;
     } else {
-      if (game.input.keyboard.isHeld(Keys.W)) pdy -= PLAYER_SPEED;
-      if (game.input.keyboard.isHeld(Keys.S)) pdy += PLAYER_SPEED;
-      if (game.input.keyboard.isHeld(Keys.A)) pdx -= PLAYER_SPEED;
-      if (game.input.keyboard.isHeld(Keys.D)) pdx += PLAYER_SPEED;
+      if (game.input.keyboard.isHeld(Keys.W)) pdy -= PLAYER_SPEED * playerSlow;
+      if (game.input.keyboard.isHeld(Keys.S)) pdy += PLAYER_SPEED * playerSlow;
+      if (game.input.keyboard.isHeld(Keys.A)) pdx -= PLAYER_SPEED * playerSlow;
+      if (game.input.keyboard.isHeld(Keys.D)) pdx += PLAYER_SPEED * playerSlow;
     }
     {
       const nx = clamp(playerX + pdx, 0, GRID_W);
@@ -764,9 +778,10 @@ game.start().then(() => {
       }
 
       // Always apply velocity (with wall collision)
-      const vx = b.speed * Math.cos(b.angle);
-      const vy = b.speed * Math.sin(b.angle);
       const brad = b.type === 'zombie' ? ZOMBIE_RADIUS : CIVILIAN_RADIUS;
+      const beingSlow = circleOverlapsCorpse(b.x, b.y, brad) ? CORPSE_SLOW : 1;
+      const vx = b.speed * Math.cos(b.angle) * beingSlow;
+      const vy = b.speed * Math.sin(b.angle) * beingSlow;
       const nx = clamp(b.x + vx, 0, GRID_W);
       const ny = clamp(b.y + vy, 0, GRID_H);
       if (!circleOverlapsWall(nx, ny, brad)) {
