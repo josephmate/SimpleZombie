@@ -9,6 +9,7 @@ import {
   Canvas,
 } from 'excalibur';
 import { InputHandler, IS_MOBILE } from './InputHandler';
+import { HudDisplay, GunState } from './HudDisplay';
 import { LevelLoader, LevelData, CELL_SIZE } from './LevelLoader';
 
 // ── Bullet system ─────────────────────────────────────────────────────────────
@@ -95,11 +96,9 @@ interface Bullet {
 }
 
 const bullets: Bullet[] = [];
-let bFired     = 0;        // shots fired in current clip
+const gunState: GunState = { bFired: 0, reloading: false, reloadTimer: 0 };
 let bTime      = SHOT_DELAY; // frames since last shot (start ready)
-let reloading  = false;
-let reloadTimer = 0;
-let fireTime   = 0;        // accumulated recoil
+let fireTime   = 0;          // accumulated recoil
 // ── Constants ──────────────────────────────────────────────────────────────────
 const GRID_W = 1200;
 const GRID_H = 900;
@@ -266,7 +265,8 @@ function startLevel(level: number): void {
   corpses.length = 0;
   for (const b of bullets) b.actor.kill();
   bullets.length = 0;
-  bFired = 0; bTime = SHOT_DELAY; reloading = false; reloadTimer = 0; fireTime = 0;
+  gunState.bFired = 0; gunState.reloading = false; gunState.reloadTimer = 0;
+  bTime = SHOT_DELAY; fireTime = 0;
   walls.length = 0;
   wallSet.clear();
 
@@ -349,32 +349,7 @@ game.start().then(() => {
   let aiFrame = 0;
 
   // ── HUD canvas (ammo display) ─────────────────────────────────────────────
-  const HUD_W = 200, HUD_H = 30;
-  const hudActor = new Actor({ x: HUD_W / 2 + 8, y: GRID_H - HUD_H / 2 - 8, z: 100 });
-  hudActor.pos = new Vector(HUD_W / 2 + 8, GRID_H - HUD_H / 2 - 8);
-  const hudCanvas = new Canvas({
-    width: HUD_W,
-    height: HUD_H,
-    cache: false,
-    draw(ctx) {
-      ctx.clearRect(0, 0, HUD_W, HUD_H);
-      ctx.fillStyle = 'rgba(0,0,0,0.55)';
-      ctx.fillRect(0, 0, HUD_W, HUD_H);
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 14px monospace';
-      ctx.textAlign = 'left';
-      ctx.textBaseline = 'middle';
-      if (reloading) {
-        const pct = reloadTimer / RELOAD_TIME;
-        ctx.fillText(`Reloading... ${Math.round(pct * 100)}%`, 8, HUD_H / 2);
-      } else {
-        const ammoLeft = CLIP_SIZE - bFired;
-        ctx.fillText(`Ammo: ${ammoLeft} / ${CLIP_SIZE}`, 8, HUD_H / 2);
-      }
-    },
-  });
-  hudActor.graphics.use(hudCanvas);
-  scene.add(hudActor);
+  const hud = new HudDisplay(scene, GRID_H, gunState, CLIP_SIZE, RELOAD_TIME);
 
   // ── Update loop ──────────────────────────────────────────────────────────
   scene.onPreUpdate = (_eng, _delta) => {
@@ -402,31 +377,30 @@ game.start().then(() => {
     // ── Keep HUD pinned to bottom-left of viewport ────────────────────────
     const cam = scene.camera;
     const vp = cam.viewport;
-    hudActor.pos.x = vp.left + HUD_W / 2 + 8;
-    hudActor.pos.y = vp.bottom - HUD_H / 2 - 8;
+    hud.pinToViewport(vp.left, vp.bottom);
 
     // ── Shooting ──────────────────────────────────────────────────────────────
     // Manual reload
-    if (inputs.reloadRequested && !reloading && bFired > 0) {
-      reloading = true;
-      reloadTimer = 0;
+    if (inputs.reloadRequested && !gunState.reloading && gunState.bFired > 0) {
+      gunState.reloading = true;
+      gunState.reloadTimer = 0;
       fireTime = 0;
     }
 
     // Reload tick
-    if (reloading) {
-      reloadTimer++;
-      if (reloadTimer >= RELOAD_TIME) {
-        reloading = false;
-        reloadTimer = 0;
-        bFired = 0;
+    if (gunState.reloading) {
+      gunState.reloadTimer++;
+      if (gunState.reloadTimer >= RELOAD_TIME) {
+        gunState.reloading = false;
+        gunState.reloadTimer = 0;
+        gunState.bFired = 0;
       }
     }
 
     bTime++;
 
-    if (inputs.isShooting && !reloading) {
-      if (bTime >= SHOT_DELAY && bFired < CLIP_SIZE) {
+    if (inputs.isShooting && !gunState.reloading) {
+      if (bTime >= SHOT_DELAY && gunState.bFired < CLIP_SIZE) {
         const len = Math.sqrt(inputs.shootDx * inputs.shootDx + inputs.shootDy * inputs.shootDy);
         if (len > 0.001) {
           // Apply recoil spread
@@ -447,13 +421,13 @@ game.start().then(() => {
           });
         }
         bTime = 0;
-        bFired++;
+        gunState.bFired++;
         fireTime = Math.min(fireTime + RECOIL_GROWTH_SPEED, RECOIL_MAX);
 
         // Auto-reload when clip exhausted
-        if (bFired >= CLIP_SIZE) {
-          reloading = true;
-          reloadTimer = 0;
+        if (gunState.bFired >= CLIP_SIZE) {
+          gunState.reloading = true;
+          gunState.reloadTimer = 0;
           fireTime = 0;
         }
       }

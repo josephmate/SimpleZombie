@@ -83,9 +83,11 @@ Then open `http://localhost:4173` in your browser.
   4. corpses
   5. walls
 2. DONE: everything moves slow over corpses
-3. check for opportunities to refactor
+3. DONE: check for opportunities to refactor
   1. DONE: bring out input into a separate file and hide input type behind it (PC vs. mobile)
   2. DONE: level management out of main.ts
+  3. DONE: hud moved out
+  4. i believe i've done enough refactoring so that agent can more efficiently use context.
 4. weapons through config files
   1. pistol
   2. rifle
