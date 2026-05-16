@@ -589,6 +589,32 @@ game.start().then(() => {
             }
           }
 
+          // ── Peer repulsion: nudge angle away from nearby zombies ────────
+          {
+            const REPULSE_RADIUS = ZOMBIE_RADIUS * 2.5; // ~25 px
+            const REPULSE_R2 = REPULSE_RADIUS * REPULSE_RADIUS;
+            let repX = 0, repY = 0;
+            for (let j = 0; j < beings.length; j++) {
+              if (j === i || beings[j].type !== 'zombie') continue;
+              const rx = b.x - beings[j].x;
+              const ry = b.y - beings[j].y;
+              const r2 = rx * rx + ry * ry;
+              if (r2 > 0 && r2 < REPULSE_R2) {
+                // Weight inversely by distance so closer = stronger push
+                const w = 1 - Math.sqrt(r2) / REPULSE_RADIUS;
+                repX += rx * w;
+                repY += ry * w;
+              }
+            }
+            if (repX !== 0 || repY !== 0) {
+              const repAngle = Math.atan2(repY, repX);
+              let diff = wrapAngle(repAngle - b.angle);
+              // Blend up to 0.15 rad of the repulsion into the current heading
+              diff = clamp(diff, -0.15, 0.15);
+              b.angle = wrapAngle(b.angle + diff * 0.4);
+            }
+          }
+
           b.angle = wrapAngle(b.angle + randFloat(-0.01, 0.01));
           if (b.speed < ZOMBIE_MAX_SPEED) {
             b.speed = Math.min(b.speed + ZOMBIE_ACCEL, ZOMBIE_MAX_SPEED);
