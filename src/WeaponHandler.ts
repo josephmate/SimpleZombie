@@ -8,12 +8,15 @@ export interface GunConfig {
   name: string;
   bulletSpeed: number;
   clipSize: number;
-  shotDelay: number;         // min frames between shots
-  reloadTime: number;        // frames to fully reload
-  recoilGrowthSpeed: number; // recoil added per shot
-  recoilDecaySpeed: number;  // recoil removed per frame when not firing
-  recoilMax: number;         // recoil cap
-  bulletDamage: number;      // HP removed per hit
+  shotDelay: number;
+  reloadTime: number;
+  recoilGrowthSpeed: number;
+  recoilDecaySpeed: number;
+  recoilMax: number;
+  bulletDamage: number;
+  explodeRange?: number;
+  explodeRadius?: number;
+  isSandbag?: boolean;     // projectile places a sandbag on stop/contact
 }
 
 /** Live state exposed to the HUD. Mutated in-place so references stay valid. */
@@ -32,6 +35,9 @@ export interface SpawnBulletRequest {
   vx: number;
   vy: number;
   damage: number;
+  explodeRange?: number;
+  explodeRadius?: number;
+  isSandbag?: boolean;
 }
 
 // ── All gun definitions ───────────────────────────────────────────────────────
@@ -95,6 +101,34 @@ export const ALL_GUNS: Record<string, GunConfig> = {
     recoilDecaySpeed: 0,
     recoilMax: 0,
     bulletDamage: 100,  // one-shot kill
+  },
+  grenade_launcher: {
+    id: 'grenade_launcher',
+    name: 'Grenade Launcher',
+    bulletSpeed: 8,
+    clipSize: 4,
+    shotDelay: 30,
+    reloadTime: 100,
+    recoilGrowthSpeed: 0,
+    recoilDecaySpeed: 0,
+    recoilMax: 0,
+    bulletDamage: 0,
+    explodeRange: 300,
+    explodeRadius: 80,
+  },
+  sandbag_launcher: {
+    id: 'sandbag_launcher',
+    name: 'Sandbag Launcher',
+    bulletSpeed: 8,
+    clipSize: 6,
+    shotDelay: 25,
+    reloadTime: 90,
+    recoilGrowthSpeed: 0,
+    recoilDecaySpeed: 0,
+    recoilMax: 0,
+    bulletDamage: 0,
+    explodeRange: 160,  // distance before sandbag is placed
+    isSandbag: true,
   },
 };
 
@@ -255,6 +289,9 @@ export class WeaponHandler {
               vx: speed * Math.cos(angle),
               vy: speed * Math.sin(angle),
               damage: gun.bulletDamage,
+              explodeRange: gun.explodeRange,
+              explodeRadius: gun.explodeRadius,
+              isSandbag: gun.isSandbag,
             });
           }
         }

@@ -95,8 +95,8 @@ Then open `http://localhost:4173` in your browser.
   3. DONE: rifle
   4. DONE: machine gun
   5. DONE: sniper rifle
-  6. grenade launcher
-  7. sand bag launch
+  6. DONE: grenade launcher
+  7. DONE: sand bag launch
 5. tuning movement and weapons
 6. tuning zombie movement so they don't clump ontop of eachother so much
 7. better level design that gives puzzles

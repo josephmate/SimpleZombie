@@ -35,6 +35,18 @@ interface Corpse {
 
 const corpses: Corpse[] = [];
 
+// ── Sandbag system ────────────────────────────────────────────────────────────
+const SANDBAG_SIZE = 18;   // square side
+const SANDBAG_SLOW = 0.15; // heavy slow — significantly more than corpses
+const SANDBAG_COLOR_STR = '#c2a96e';
+
+interface Sandbag { x: number; y: number; }
+const sandbags: Sandbag[] = [];
+
+function placeSandbag(x: number, y: number): void {
+  sandbags.push({ x, y });
+}
+
 // ── Wall system ───────────────────────────────────────────────────────────────
 // CELL_SIZE imported from LevelLoader
 const WALL_COLOR_STR = '#8B4513'; // saddle brown
@@ -82,6 +94,18 @@ function circleOverlapsCorpse(px: number, py: number, radius: number): boolean {
   return false;
 }
 
+/** True if a circle at (px,py) with given radius overlaps any sandbag square. */
+function circleOverlapsSandbag(px: number, py: number, radius: number): boolean {
+  const half = SANDBAG_SIZE / 2;
+  for (const sb of sandbags) {
+    const nearX = clamp(px, sb.x - half, sb.x + half);
+    const nearY = clamp(py, sb.y - half, sb.y + half);
+    const dx = px - nearX, dy = py - nearY;
+    if (dx * dx + dy * dy < radius * radius) return true;
+  }
+  return false;
+}
+
 interface Bullet {
   x: number;
   y: number;
@@ -90,6 +114,11 @@ interface Bullet {
   age: number;
   actor: Actor;
   damage: number;
+  isGrenade: boolean;
+  isSandbag: boolean;
+  explodeRange: number;
+  explodeRadius: number;
+  distTraveled: number;
 }
 
 const bullets: Bullet[] = [];
@@ -257,9 +286,10 @@ function startLevel(level: number): void {
   // Clear previous state
   beings.length = 0;
   corpses.length = 0;
+  sandbags.length = 0;
   for (const b of bullets) b.actor.kill();
   bullets.length = 0;
-  weaponHandler.reset(['pistol', 'shotgun', 'rifle', 'machine_gun', 'sniper']);
+  weaponHandler.reset(['pistol', 'shotgun', 'rifle', 'machine_gun', 'sniper', 'grenade_launcher', 'sandbag_launcher']);
   walls.length = 0;
   wallSet.clear();
 
@@ -317,6 +347,11 @@ game.start().then(() => {
     cache: false,
     draw(ctx) {
       ctx.clearRect(0, 0, GRID_W, GRID_H);
+      // Draw sandbags below corpses
+      ctx.fillStyle = SANDBAG_COLOR_STR;
+      for (const sb of sandbags) {
+        ctx.fillRect(sb.x - SANDBAG_SIZE / 2, sb.y - SANDBAG_SIZE / 2, SANDBAG_SIZE, SANDBAG_SIZE);
+      }
       for (const co of corpses) {
         ctx.fillStyle = co.color;
         ctx.fillRect(co.x - CORPSE_SIZE / 2, co.y - CORPSE_SIZE / 2, CORPSE_SIZE, CORPSE_SIZE);
@@ -348,7 +383,9 @@ game.start().then(() => {
   scene.onPreUpdate = (_eng, _delta) => {
     // ── Player movement ──────────────────────────────────────────────────────────────────
     const inputs = inputHandler.getInputs(playerX, playerY);
-    const playerSlow = circleOverlapsCorpse(playerX, playerY, PLAYER_RADIUS) ? CORPSE_SLOW : 1;
+    const playerSlow = circleOverlapsSandbag(playerX, playerY, PLAYER_RADIUS)
+      ? SANDBAG_SLOW
+      : circleOverlapsCorpse(playerX, playerY, PLAYER_RADIUS) ? CORPSE_SLOW : 1;
     const pdx = inputs.dx * PLAYER_SPEED * playerSlow;
     const pdy = inputs.dy * PLAYER_SPEED * playerSlow;
     {
@@ -387,9 +424,24 @@ game.start().then(() => {
     );
     for (const req of spawns) {
       const bActor = new Actor({ x: req.x, y: req.y, z: 8 });
-      bActor.graphics.use(new Circle({ radius: 2, color: Color.fromHex('#2a1a0a') }));
+      const isGrenade = !!req.explodeRange && !req.isSandbag;
+      const isSandbag = !!req.isSandbag;
+      bActor.graphics.use(new Circle({
+        radius: (isGrenade || isSandbag) ? 5 : 2,
+        color: isGrenade ? Color.fromHex('#3a7a00')
+             : isSandbag ? Color.fromHex('#c2a96e')
+             : Color.fromHex('#2a1a0a'),
+      }));
       scene.add(bActor);
-      bullets.push({ x: req.x, y: req.y, vx: req.vx, vy: req.vy, age: 0, damage: req.damage, actor: bActor });
+      bullets.push({
+        x: req.x, y: req.y, vx: req.vx, vy: req.vy, age: 0,
+        damage: req.damage, actor: bActor,
+        isGrenade,
+        isSandbag,
+        explodeRange: req.explodeRange ?? 0,
+        explodeRadius: req.explodeRadius ?? 0,
+        distTraveled: 0,
+      });
     }
 
     // ── Bullet movement + hit detection ───────────────────────────────────────
@@ -398,51 +450,99 @@ game.start().then(() => {
       bul.x += bul.vx;
       bul.y += bul.vy;
       bul.age++;
+      bul.distTraveled += Math.sqrt(bul.vx * bul.vx + bul.vy * bul.vy);
       bul.actor.pos.x = bul.x;
       bul.actor.pos.y = bul.y;
 
-      // Remove if out of bounds, expired, or hit a wall
-      if (bul.age >= BULLET_LIFETIME ||
+      // Grenade detonates at max range or on wall impact
+      const grenadeDetonate =
+        bul.isGrenade &&
+        (bul.distTraveled >= bul.explodeRange ||
           bul.x < 0 || bul.x > GRID_W ||
           bul.y < 0 || bul.y > GRID_H ||
-          pointInWall(bul.x, bul.y)) {
+          pointInWall(bul.x, bul.y));
+
+      // Sandbag lands at max range or on wall impact
+      const sandbagLand =
+        bul.isSandbag &&
+        (bul.distTraveled >= bul.explodeRange ||
+          bul.x < 0 || bul.x > GRID_W ||
+          bul.y < 0 || bul.y > GRID_H ||
+          pointInWall(bul.x, bul.y));
+
+      if (grenadeDetonate) {
+        const r2 = bul.explodeRadius * bul.explodeRadius;
+        for (let j = beings.length - 1; j >= 0; j--) {
+          if (dist2(bul.x, bul.y, beings[j].x, beings[j].y) < r2) {
+            beings[j].hp -= 9999;
+            if (beings[j].hp <= 0) corpses.push(killBeing(beings, j));
+          }
+        }
         removeBullet(i);
         continue;
       }
 
-      // Check hit against beings (zombies and civilians)
+      if (sandbagLand) {
+        placeSandbag(bul.x, bul.y);
+        removeBullet(i);
+        continue;
+      }
+
+      // Remove normal bullets if out of bounds, expired, or hit a wall
+      if (!bul.isGrenade && (
+          bul.age >= BULLET_LIFETIME ||
+          bul.x < 0 || bul.x > GRID_W ||
+          bul.y < 0 || bul.y > GRID_H ||
+          pointInWall(bul.x, bul.y))) {
+        removeBullet(i);
+        continue;
+      }
+
+      // Check hit against beings — grenades/sandbags detonate on contact
       let hit = false;
       for (let j = beings.length - 1; j >= 0; j--) {
         const be = beings[j];
         const HIT_R = (be.type === 'zombie' ? ZOMBIE_RADIUS : CIVILIAN_RADIUS) + 4;
         if (dist2(bul.x, bul.y, be.x, be.y) < HIT_R * HIT_R ||
             dist2(bul.x - bul.vx / 2, bul.y - bul.vy / 2, be.x, be.y) < HIT_R * HIT_R) {
-          be.hp -= bul.damage;
+          if (bul.isSandbag) {
+            placeSandbag(bul.x, bul.y);
+          } else if (bul.isGrenade) {
+            // Grenade detonates on contact with any being
+            const r2 = bul.explodeRadius * bul.explodeRadius;
+            for (let k = beings.length - 1; k >= 0; k--) {
+              if (dist2(bul.x, bul.y, beings[k].x, beings[k].y) < r2) {
+                beings[k].hp -= 9999;
+                if (beings[k].hp <= 0) corpses.push(killBeing(beings, k));
+              }
+            }
+          } else {
+            be.hp -= bul.damage;
+            if (be.hp <= 0) corpses.push(killBeing(beings, j));
+          }
           removeBullet(i);
           hit = true;
-          if (be.hp <= 0) {
-            corpses.push(killBeing(beings, j));
-          }
           break;
         }
       }
       if (hit) continue;
 
-      // Check hit against corpses (bullets stop on corpses)
-      for (let j = corpses.length - 1; j >= 0; j--) {
-        const co = corpses[j];
-        const half = CORPSE_SIZE / 2;
-        if (bul.x >= co.x - half && bul.x <= co.x + half &&
-            bul.y >= co.y - half && bul.y <= co.y + half) {
-          // Jiggle the corpse slightly in the bullet's direction
-          co.vx += bul.vx * 0.4;
-          co.vy += bul.vy * 0.4;
-          removeBullet(i);
-          hit = true;
-          break;
+      // Grenades and sandbags pass through corpses; normal bullets stop on them
+      if (!bul.isGrenade && !bul.isSandbag) {
+        for (let j = corpses.length - 1; j >= 0; j--) {
+          const co = corpses[j];
+          const half = CORPSE_SIZE / 2;
+          if (bul.x >= co.x - half && bul.x <= co.x + half &&
+              bul.y >= co.y - half && bul.y <= co.y + half) {
+            co.vx += bul.vx * 0.4;
+            co.vy += bul.vy * 0.4;
+            removeBullet(i);
+            hit = true;
+            break;
+          }
         }
+        if (hit) continue;
       }
-      if (hit) continue;
     }
 
 
@@ -523,7 +623,9 @@ game.start().then(() => {
 
       // Always apply velocity (with wall collision)
       const brad = b.type === 'zombie' ? ZOMBIE_RADIUS : CIVILIAN_RADIUS;
-      const beingSlow = circleOverlapsCorpse(b.x, b.y, brad) ? CORPSE_SLOW : 1;
+      const beingSlow = circleOverlapsSandbag(b.x, b.y, brad)
+        ? SANDBAG_SLOW
+        : circleOverlapsCorpse(b.x, b.y, brad) ? CORPSE_SLOW : 1;
       const vx = b.speed * Math.cos(b.angle) * beingSlow;
       const vy = b.speed * Math.sin(b.angle) * beingSlow;
       const nx = clamp(b.x + vx, 0, GRID_W);
