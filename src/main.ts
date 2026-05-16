@@ -12,6 +12,8 @@ import { InputHandler, IS_MOBILE } from './InputHandler';
 import { HudDisplay } from './HudDisplay';
 import { LevelLoader, LevelData, CELL_SIZE } from './LevelLoader';
 import { WeaponHandler } from './WeaponHandler';
+import { zombieNextMove, EntityPos as ZombiePos, ZOMBIE_RADIUS, ZOMBIE_MAX_SPEED } from './zombie';
+import { civilianNextMove, EntityPos as CivilianPos, CIVILIAN_RADIUS, HUMAN_MIN_SPEED } from './civilian';
 
 // ── Bullet system ─────────────────────────────────────────────────────────────
 const BULLET_LIFETIME   = 60;   // frames before bullet expires
@@ -82,34 +84,6 @@ function pointInWall(px: number, py: number): boolean {
   return isWallCell(Math.floor(px / CELL_SIZE), Math.floor(py / CELL_SIZE));
 }
 
-/**
- * True if the straight line from (x1,y1) to (x2,y2) passes through no wall cell.
- * Uses a grid DDA traversal — O(grid cells crossed).
- */
-function hasLineOfSight(x1: number, y1: number, x2: number, y2: number): boolean {
-  let cx = Math.floor(x1 / CELL_SIZE), cy = Math.floor(y1 / CELL_SIZE);
-  const endCX = Math.floor(x2 / CELL_SIZE), endCY = Math.floor(y2 / CELL_SIZE);
-  if (isWallCell(cx, cy) || isWallCell(endCX, endCY)) return false;
-  if (cx === endCX && cy === endCY) return true;
-  const dx = x2 - x1, dy = y2 - y1;
-  const stepX = dx > 0 ? 1 : -1, stepY = dy > 0 ? 1 : -1;
-  const tDX = dx !== 0 ? Math.abs(CELL_SIZE / dx) : Infinity;
-  const tDY = dy !== 0 ? Math.abs(CELL_SIZE / dy) : Infinity;
-  let tX = dx > 0 ? ((cx + 1) * CELL_SIZE - x1) / dx
-          : dx < 0 ? (cx * CELL_SIZE - x1) / dx
-          : Infinity;
-  let tY = dy > 0 ? ((cy + 1) * CELL_SIZE - y1) / dy
-          : dy < 0 ? (cy * CELL_SIZE - y1) / dy
-          : Infinity;
-  for (let step = 0; step < 400; step++) {
-    if (tX < tY) { cx += stepX; tX += tDX; }
-    else          { cy += stepY; tY += tDY; }
-    if (isWallCell(cx, cy)) return false;
-    if (cx === endCX && cy === endCY) return true;
-  }
-  return true;
-}
-
 /** True if a circle at (px,py) with given radius overlaps any corpse square. */
 function circleOverlapsCorpse(px: number, py: number, radius: number): boolean {
   const half = CORPSE_SIZE / 2;
@@ -154,18 +128,9 @@ const bullets: Bullet[] = [];
 const GRID_W = 1200;
 const GRID_H = 900;
 const PLAYER_SPEED = 3.5;
-const ZOMBIE_ALERT_DIST = 50;        // px: zombie detects targets by proximity (no LOS needed)
-const ZOMBIE_LOS_DIST   = 500;       // px: zombie detects targets when it has line of sight
-const ZOMBIE_MAX_SPEED = 2.2;
-const ZOMBIE_ACCEL = 0.12;
-const HUMAN_MAX_SPEED = 2.0;
-const HUMAN_MIN_SPEED = 0.8;
-const INFECT_DIST_SQ = 20 * 20;     // zombie infects human when this close
 const ZOMBIE_DAMAGE_DIST_SQ = 16 * 16;
 
-const ZOMBIE_RADIUS = 10;
 const PLAYER_RADIUS = 12;
-const CIVILIAN_RADIUS = 9;
 
 // ── Colours ───────────────────────────────────────────────────────────────────
 const BG_COLOR       = Color.fromHex('#d0d0d0'); // light gray background
@@ -578,123 +543,65 @@ game.start().then(() => {
     // ── Beings update (AI runs every AI_THROTTLE frames; movement every frame) ─
     aiFrame++;
     const runAI = (aiFrame % AI_THROTTLE === 0);
+
+    // Build per-type position slices once per frame for the AI calls
+    const zombiePositions: ZombiePos[] = [];
+    const zombieBeingIndices: number[] = [];   // beings[] index for each zombiePositions entry
+    const civilianPositions: CivilianPos[] = [];
+    const civilianBeingIndices: number[] = []; // beings[] index for each civilianPositions entry
+    for (let j = 0; j < beings.length; j++) {
+      if (beings[j].type === 'zombie') {
+        zombiePositions.push({ x: beings[j].x, y: beings[j].y });
+        zombieBeingIndices.push(j);
+      } else {
+        civilianPositions.push({ x: beings[j].x, y: beings[j].y });
+        civilianBeingIndices.push(j);
+      }
+    }
+
+    let zombieAIIdx = -1; // tracks this being's slot in zombiePositions[]
+    let civAIIdx    = -1; // tracks this being's slot in civilianPositions[]
+
     for (let i = 0; i < beings.length; i++) {
       const b = beings[i];
+      if (b.type === 'zombie') zombieAIIdx++;
+      else                     civAIIdx++;
+
+      // Desired displacement — updated by AI when it runs
+      let desiredDX = b.speed * Math.cos(b.angle);
+      let desiredDY = b.speed * Math.sin(b.angle);
 
       if (runAI) {
         if (b.type === 'zombie') {
-          // ── Zombie AI ──────────────────────────────────────────────────
-          // Detect targets: LOS grants extended range; proximity always works.
-          const ALERT_D2 = ZOMBIE_ALERT_DIST * ZOMBIE_ALERT_DIST;
-          const LOS_D2   = ZOMBIE_LOS_DIST   * ZOMBIE_LOS_DIST;
-
-          // --- Player ---
-          const dpx = playerX - b.x, dpy = playerY - b.y;
-          const dPlayer2 = dpx * dpx + dpy * dpy;
-          const playerDetected = dPlayer2 < ALERT_D2 ||
-            (dPlayer2 < LOS_D2 && hasLineOfSight(b.x, b.y, playerX, playerY));
-
-          // --- Nearest detected human ---
-          let bestHumanDist2 = Infinity, bestHumanIdx = -1;
-          for (let j = 0; j < beings.length; j++) {
-            if (j !== i && beings[j].type === 'human') {
-              const hd2 = dist2(b.x, b.y, beings[j].x, beings[j].y);
-              if (hd2 < bestHumanDist2) {
-                const detected = hd2 < ALERT_D2 ||
-                  (hd2 < LOS_D2 && hasLineOfSight(b.x, b.y, beings[j].x, beings[j].y));
-                if (detected) { bestHumanDist2 = hd2; bestHumanIdx = j; }
-              }
-            }
+          const result = zombieNextMove(
+            b, zombieAIIdx,
+            zombiePositions, civilianPositions,
+            { x: playerX, y: playerY },
+            wallSet, randFloat,
+          );
+          b.angle = result.angle;
+          b.speed = result.speed;
+          desiredDX = result.desiredX - b.x;
+          desiredDY = result.desiredY - b.y;
+          if (result.infectCivilianIdx >= 0) {
+            beings[civilianBeingIndices[result.infectCivilianIdx]].pendingInfect = true;
           }
-
-          // --- Chase the closer detected target ---
-          if (playerDetected && (bestHumanIdx < 0 || dPlayer2 <= bestHumanDist2)) {
-            // Chase player
-            const targetAngle = Math.atan2(dpy, dpx) + randFloat(-0.2, 0.2);
-            let diff = wrapAngle(targetAngle - b.angle);
-            diff = clamp(diff, -0.1, 0.1);
-            b.angle = wrapAngle(b.angle + diff);
-          } else if (bestHumanIdx >= 0) {
-            // Chase nearest visible human
-            const hx = beings[bestHumanIdx].x, hy = beings[bestHumanIdx].y;
-            const targetAngle = Math.atan2(hy - b.y, hx - b.x) + randFloat(-0.2, 0.2);
-            let diff = wrapAngle(targetAngle - b.angle);
-            diff = clamp(diff, -0.1, 0.1);
-            b.angle = wrapAngle(b.angle + diff);
-            if (bestHumanDist2 < INFECT_DIST_SQ) {
-              beings[bestHumanIdx].pendingInfect = true;
-              b.speed = 0;
-            }
-          } else {
-            // No target detected — wander
-            b.angle = wrapAngle(b.angle + randFloat(-0.1, 0.1));
-          }
-
-          // ── Peer repulsion: nudge angle away from nearby zombies ────────
-          {
-            const REPULSE_RADIUS = ZOMBIE_RADIUS * 2.5; // ~25 px
-            const REPULSE_R2 = REPULSE_RADIUS * REPULSE_RADIUS;
-            let repX = 0, repY = 0;
-            for (let j = 0; j < beings.length; j++) {
-              if (j === i || beings[j].type !== 'zombie') continue;
-              const rx = b.x - beings[j].x;
-              const ry = b.y - beings[j].y;
-              const r2 = rx * rx + ry * ry;
-              if (r2 > 0 && r2 < REPULSE_R2) {
-                // Weight inversely by distance so closer = stronger push
-                const w = 1 - Math.sqrt(r2) / REPULSE_RADIUS;
-                repX += rx * w;
-                repY += ry * w;
-              }
-            }
-            if (repX !== 0 || repY !== 0) {
-              const repAngle = Math.atan2(repY, repX);
-              let diff = wrapAngle(repAngle - b.angle);
-              // Blend up to 0.15 rad of the repulsion into the current heading
-              diff = clamp(diff, -0.15, 0.15);
-              b.angle = wrapAngle(b.angle + diff * 0.4);
-            }
-          }
-
-          b.angle = wrapAngle(b.angle + randFloat(-0.01, 0.01));
-          if (b.speed < ZOMBIE_MAX_SPEED) {
-            b.speed = Math.min(b.speed + ZOMBIE_ACCEL, ZOMBIE_MAX_SPEED);
-          } else {
-            b.speed += randFloat(-0.1, ZOMBIE_ACCEL);
-            b.speed = clamp(b.speed, 0.7, ZOMBIE_MAX_SPEED);
-          }
-
         } else {
-          // ── Human AI ───────────────────────────────────────────────────
-          let bestDist2 = 800000;
-          let bestIdx = -1;
-          for (let j = 0; j < beings.length; j++) {
-            if (beings[j].type === 'zombie') {
-              const d2 = dist2(b.x, b.y, beings[j].x, beings[j].y);
-              if (d2 < bestDist2) { bestDist2 = d2; bestIdx = j; }
-            }
-          }
-          if (bestIdx >= 0 && bestDist2 < 360000) {
-            const fleeAngle = Math.atan2(b.y - beings[bestIdx].y, b.x - beings[bestIdx].x);
-            let diff = wrapAngle(fleeAngle - b.angle);
-            diff = clamp(diff, -0.3, 0.3);
-            b.angle = wrapAngle(b.angle + diff);
-            b.angle = wrapAngle(b.angle + randFloat(-0.2, 0.2));
-          } else {
-            b.angle = wrapAngle(b.angle + randFloat(-0.3, 0.3));
-          }
-          b.speed += randFloat(-0.1, 0.1);
-          b.speed = clamp(b.speed, HUMAN_MIN_SPEED, HUMAN_MAX_SPEED);
+          const result = civilianNextMove(b, zombiePositions, randFloat);
+          b.angle = result.angle;
+          b.speed = result.speed;
+          desiredDX = result.desiredX - b.x;
+          desiredDY = result.desiredY - b.y;
         }
       }
 
-      // Always apply velocity (with wall collision)
+      // ── Apply movement with terrain slow + wall collision ────────────────
       const brad = b.type === 'zombie' ? ZOMBIE_RADIUS : CIVILIAN_RADIUS;
       const beingSlow = circleOverlapsSandbag(b.x, b.y, brad)
         ? SANDBAG_SLOW
         : circleOverlapsCorpse(b.x, b.y, brad) ? CORPSE_SLOW : 1;
-      const vx = b.speed * Math.cos(b.angle) * beingSlow;
-      const vy = b.speed * Math.sin(b.angle) * beingSlow;
+      const vx = desiredDX * beingSlow;
+      const vy = desiredDY * beingSlow;
       const nx = clamp(b.x + vx, 0, GRID_W);
       const ny = clamp(b.y + vy, 0, GRID_H);
       if (!circleOverlapsWall(nx, ny, brad)) {

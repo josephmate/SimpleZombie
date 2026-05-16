@@ -101,9 +101,10 @@ Then open `http://localhost:4173` in your browser.
    - defaults are already pretty good
 6. DONE: tuning zombie movement so they don't clump ontop of eachother so much
 7. DONE: line of sight wall check
-8. refactor the different entities out:
-    1. zombie
-    2. civilian
+8. DONE: refactor the different entities out:
+    1. DONE: zombie
+    2. DONE: civilian
+9. ------ At this point the engine is finalized lets go with it ---------
 9.  better level design that gives puzzles
 10. sound
   11. for each weapon
