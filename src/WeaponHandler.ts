@@ -65,12 +65,36 @@ export const ALL_GUNS: Record<string, GunConfig> = {
     name: 'Rifle',
     bulletSpeed: 20,
     clipSize: 30,
-    shotDelay: 4,
+    shotDelay: 2,
     reloadTime: 70,
     recoilGrowthSpeed: 4,
     recoilDecaySpeed: 18,
     recoilMax: 50,
     bulletDamage: 50,
+  },
+  machine_gun: {
+    id: 'machine_gun',
+    name: 'Machine Gun',
+    bulletSpeed: 16,
+    clipSize: 1000,
+    shotDelay: 1,
+    reloadTime: 120,
+    recoilGrowthSpeed: 2,
+    recoilDecaySpeed: 8,
+    recoilMax: 120,
+    bulletDamage: 25,
+  },
+  sniper: {
+    id: 'sniper',
+    name: 'Sniper Rifle',
+    bulletSpeed: 30,
+    clipSize: 5,
+    shotDelay: 40,
+    reloadTime: 90,
+    recoilGrowthSpeed: 0,
+    recoilDecaySpeed: 0,
+    recoilMax: 0,
+    bulletDamage: 100,  // one-shot kill
   },
 };
 
@@ -149,6 +173,17 @@ export class WeaponHandler {
   switchTo(id: string): void {
     const idx = this.enabledGuns.findIndex(g => g.id === id);
     if (idx >= 0) this.switchToIndex(idx);
+  }
+
+  /** Cycle to the previous enabled gun (wraps around). */
+  cyclePrev(): void {
+    const n = this.enabledGuns.length;
+    this.switchToIndex((this.currentGunIdx - 1 + n) % n);
+  }
+
+  /** Cycle to the next enabled gun (wraps around). */
+  cycleNext(): void {
+    this.switchToIndex((this.currentGunIdx + 1) % this.enabledGuns.length);
   }
 
   /**

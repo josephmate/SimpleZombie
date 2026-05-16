@@ -44,6 +44,29 @@
         #fire-zone {
           display: block;
         }
+        #weapon-cycle {
+          display: flex;
+        }
+      }
+      #weapon-cycle {
+        position: fixed;
+        bottom: 60px;
+        left: 50%;
+        transform: translateX(-50%);
+        display: none;
+        gap: 14px;
+        z-index: 100;
+      }
+      #weapon-cycle button {
+        width: 52px;
+        height: 52px;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.15);
+        border: 2px solid rgba(255, 255, 255, 0.5);
+        color: #fff;
+        font-size: 1.3rem;
+        touch-action: none;
+        cursor: pointer;
       }
       /* ── Level select overlay ─────────────────────────────────────────── */
       #level-select {
@@ -113,6 +136,10 @@
     </div>
 
     <div id="joystick-zone"></div>
+    <div id="weapon-cycle">
+      <button id="weapon-prev">&#9664;</button>
+      <button id="weapon-next">&#9654;</button>
+    </div>
     <div id="fire-zone"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

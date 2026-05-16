@@ -259,7 +259,7 @@ function startLevel(level: number): void {
   corpses.length = 0;
   for (const b of bullets) b.actor.kill();
   bullets.length = 0;
-  weaponHandler.reset(['pistol']);
+  weaponHandler.reset(['pistol', 'shotgun', 'rifle', 'machine_gun', 'sniper']);
   walls.length = 0;
   wallSet.clear();
 
@@ -366,6 +366,11 @@ game.start().then(() => {
     }
     playerActor.pos.x = playerX;
     playerActor.pos.y = playerY;
+
+    // ── Weapon switching ──────────────────────────────────────────────────────
+    if (inputs.weaponSlot !== null) weaponHandler.switchToIndex(inputs.weaponSlot - 1);
+    if (inputs.weaponCyclePrev) weaponHandler.cyclePrev();
+    if (inputs.weaponCycleNext) weaponHandler.cycleNext();
 
     // ── Keep HUD pinned to bottom-left of viewport ────────────────────────
     const cam = scene.camera;

@@ -3,6 +3,11 @@ import nipplejs from 'nipplejs';
 
 export const IS_MOBILE = !window.matchMedia('(pointer: fine)').matches;
 
+const NUMBER_KEYS = [
+  Keys.Key1, Keys.Key2, Keys.Key3, Keys.Key4, Keys.Key5,
+  Keys.Key6, Keys.Key7, Keys.Key8, Keys.Key9,
+];
+
 export interface PlayerInputs {
   dx: number;               // movement x: keyboard -1/0/1, joystick -1..1
   dy: number;               // movement y: keyboard -1/0/1, joystick -1..1
@@ -10,6 +15,9 @@ export interface PlayerInputs {
   shootDx: number;          // shoot direction x (raw, caller normalises)
   shootDy: number;          // shoot direction y (raw, caller normalises)
   isShooting: boolean;      // PC: mouse held; mobile: fire stick active
+  weaponSlot: number | null; // 1-9 if a number key was pressed, null otherwise
+  weaponCyclePrev: boolean;  // cycle to previous weapon
+  weaponCycleNext: boolean;  // cycle to next weapon
 }
 
 export class InputHandler {
@@ -21,6 +29,8 @@ export class InputHandler {
   private fireJoyDx = 0;
   private fireJoyDy = 0;
   private mobileFireActive = false;
+  private mobileCyclePrev = false;
+  private mobileCycleNext = false;
 
   // PC mouse state
   private mouseDown = false;
@@ -72,6 +82,11 @@ export class InputHandler {
       this.fireJoyDy = 0;
       this.mobileFireActive = false;
     });
+
+    const prevBtn = document.getElementById('weapon-prev');
+    const nextBtn = document.getElementById('weapon-next');
+    prevBtn?.addEventListener('touchstart', (e) => { e.preventDefault(); this.mobileCyclePrev = true; }, { passive: false });
+    nextBtn?.addEventListener('touchstart', (e) => { e.preventDefault(); this.mobileCycleNext = true; }, { passive: false });
   }
 
   /** Call once after game.start() to register pointer events. */
@@ -89,6 +104,10 @@ export class InputHandler {
   /** Returns the current player inputs for this frame. */
   getInputs(playerX: number, playerY: number): PlayerInputs {
     if (IS_MOBILE) {
+      const cyclePrev = this.mobileCyclePrev;
+      const cycleNext = this.mobileCycleNext;
+      this.mobileCyclePrev = false;
+      this.mobileCycleNext = false;
       return {
         dx: this.joystickDx,
         dy: this.joystickDy,
@@ -96,6 +115,9 @@ export class InputHandler {
         shootDx: this.fireJoyDx,
         shootDy: this.fireJoyDy,
         isShooting: this.mobileFireActive,
+        weaponSlot: null,
+        weaponCyclePrev: cyclePrev,
+        weaponCycleNext: cycleNext,
       };
     }
 
@@ -104,6 +126,15 @@ export class InputHandler {
     if (this.engine.input.keyboard.isHeld(Keys.S)) dy += 1;
     if (this.engine.input.keyboard.isHeld(Keys.A)) dx -= 1;
     if (this.engine.input.keyboard.isHeld(Keys.D)) dx += 1;
+
+    let weaponSlot: number | null = null;
+    for (let i = 0; i < NUMBER_KEYS.length; i++) {
+      if (this.engine.input.keyboard.wasPressed(NUMBER_KEYS[i])) {
+        weaponSlot = i + 1;
+        break;
+      }
+    }
+
     return {
       dx,
       dy,
@@ -111,6 +142,9 @@ export class InputHandler {
       shootDx: this.mouseWorldX - playerX,
       shootDy: this.mouseWorldY - playerY,
       isShooting: this.mouseDown,
+      weaponSlot,
+      weaponCyclePrev: false,
+      weaponCycleNext: false,
     };
   }
 }

@@ -90,12 +90,13 @@ Then open `http://localhost:4173` in your browser.
   3. DONE: weapons moved out
   4. i believe i've done enough refactoring so that agent can more efficiently use context.
 4. weapons through config files
-  1. pistol
-  2. rifle
-  3. machine gun
-  4. sniper rifle
-  5. grenade launcher
-  6. sand bag launch
+  1. DONE: pistol
+  2. DONE: shotgun
+  3. DONE: rifle
+  4. DONE: machine gun
+  5. DONE: sniper rifle
+  6. grenade launcher
+  7. sand bag launch
 5. tuning movement and weapons
 6. tuning zombie movement so they don't clump ontop of eachother so much
 7. better level design that gives puzzles
