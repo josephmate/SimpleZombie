@@ -100,23 +100,26 @@ Then open `http://localhost:4173` in your browser.
 5. DONE: tuning movement and weapons
    - defaults are already pretty good
 6. DONE: tuning zombie movement so they don't clump ontop of eachother so much
-7. line of sight wall check
-8. better level design that gives puzzles
-9. sound
-  1. for each weapon
-    1. pistol
-    2. rifle
-    3. machine gun
-    4. sniper rifle
-    5. grenade launcher
-    6. sand bag launch
-  2. hiting zombie
-  3. hiting civ
-10. animations
+7. DONE: line of sight wall check
+8. refactor the different entities out:
+    1. zombie
+    2. civilian
+9.  better level design that gives puzzles
+10. sound
+  11. for each weapon
+    12. pistol
+    13. rifle
+    14. machine gun
+    15. sniper rifle
+    16. grenade launcher
+    17. sand bag launch
+  12. hiting zombie
+  13. hiting civ
+11. animations
    1. hitting zombie
    2. hitting civ
-11. level editor that produces the ascii file
-12. support opening a remote json file with the levels config so others can share
-13. speed running options
+12. level editor that produces the ascii file
+13. support opening a remote json file with the levels config so others can share
+14. speed running options
     1.  timer for each level
     2.  timer from start to finish

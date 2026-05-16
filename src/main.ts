@@ -82,6 +82,34 @@ function pointInWall(px: number, py: number): boolean {
   return isWallCell(Math.floor(px / CELL_SIZE), Math.floor(py / CELL_SIZE));
 }
 
+/**
+ * True if the straight line from (x1,y1) to (x2,y2) passes through no wall cell.
+ * Uses a grid DDA traversal — O(grid cells crossed).
+ */
+function hasLineOfSight(x1: number, y1: number, x2: number, y2: number): boolean {
+  let cx = Math.floor(x1 / CELL_SIZE), cy = Math.floor(y1 / CELL_SIZE);
+  const endCX = Math.floor(x2 / CELL_SIZE), endCY = Math.floor(y2 / CELL_SIZE);
+  if (isWallCell(cx, cy) || isWallCell(endCX, endCY)) return false;
+  if (cx === endCX && cy === endCY) return true;
+  const dx = x2 - x1, dy = y2 - y1;
+  const stepX = dx > 0 ? 1 : -1, stepY = dy > 0 ? 1 : -1;
+  const tDX = dx !== 0 ? Math.abs(CELL_SIZE / dx) : Infinity;
+  const tDY = dy !== 0 ? Math.abs(CELL_SIZE / dy) : Infinity;
+  let tX = dx > 0 ? ((cx + 1) * CELL_SIZE - x1) / dx
+          : dx < 0 ? (cx * CELL_SIZE - x1) / dx
+          : Infinity;
+  let tY = dy > 0 ? ((cy + 1) * CELL_SIZE - y1) / dy
+          : dy < 0 ? (cy * CELL_SIZE - y1) / dy
+          : Infinity;
+  for (let step = 0; step < 400; step++) {
+    if (tX < tY) { cx += stepX; tX += tDX; }
+    else          { cy += stepY; tY += tDY; }
+    if (isWallCell(cx, cy)) return false;
+    if (cx === endCX && cy === endCY) return true;
+  }
+  return true;
+}
+
 /** True if a circle at (px,py) with given radius overlaps any corpse square. */
 function circleOverlapsCorpse(px: number, py: number, radius: number): boolean {
   const half = CORPSE_SIZE / 2;
@@ -126,7 +154,8 @@ const bullets: Bullet[] = [];
 const GRID_W = 1200;
 const GRID_H = 900;
 const PLAYER_SPEED = 3.5;
-const ZOMBIE_ALERT_DIST = 200;       // px: zombie chases player when closer than this
+const ZOMBIE_ALERT_DIST = 50;        // px: zombie detects targets by proximity (no LOS needed)
+const ZOMBIE_LOS_DIST   = 500;       // px: zombie detects targets when it has line of sight
 const ZOMBIE_MAX_SPEED = 2.2;
 const ZOMBIE_ACCEL = 0.12;
 const HUMAN_MAX_SPEED = 2.0;
@@ -555,38 +584,50 @@ game.start().then(() => {
       if (runAI) {
         if (b.type === 'zombie') {
           // ── Zombie AI ──────────────────────────────────────────────────
-          const dpx = playerX - b.x;
-          const dpy = playerY - b.y;
-          const dPlayer2 = dpx * dpx + dpy * dpy;
+          // Detect targets: LOS grants extended range; proximity always works.
+          const ALERT_D2 = ZOMBIE_ALERT_DIST * ZOMBIE_ALERT_DIST;
+          const LOS_D2   = ZOMBIE_LOS_DIST   * ZOMBIE_LOS_DIST;
 
-          if (dPlayer2 < ZOMBIE_ALERT_DIST * ZOMBIE_ALERT_DIST) {
+          // --- Player ---
+          const dpx = playerX - b.x, dpy = playerY - b.y;
+          const dPlayer2 = dpx * dpx + dpy * dpy;
+          const playerDetected = dPlayer2 < ALERT_D2 ||
+            (dPlayer2 < LOS_D2 && hasLineOfSight(b.x, b.y, playerX, playerY));
+
+          // --- Nearest detected human ---
+          let bestHumanDist2 = Infinity, bestHumanIdx = -1;
+          for (let j = 0; j < beings.length; j++) {
+            if (j !== i && beings[j].type === 'human') {
+              const hd2 = dist2(b.x, b.y, beings[j].x, beings[j].y);
+              if (hd2 < bestHumanDist2) {
+                const detected = hd2 < ALERT_D2 ||
+                  (hd2 < LOS_D2 && hasLineOfSight(b.x, b.y, beings[j].x, beings[j].y));
+                if (detected) { bestHumanDist2 = hd2; bestHumanIdx = j; }
+              }
+            }
+          }
+
+          // --- Chase the closer detected target ---
+          if (playerDetected && (bestHumanIdx < 0 || dPlayer2 <= bestHumanDist2)) {
             // Chase player
             const targetAngle = Math.atan2(dpy, dpx) + randFloat(-0.2, 0.2);
             let diff = wrapAngle(targetAngle - b.angle);
             diff = clamp(diff, -0.1, 0.1);
             b.angle = wrapAngle(b.angle + diff);
+          } else if (bestHumanIdx >= 0) {
+            // Chase nearest visible human
+            const hx = beings[bestHumanIdx].x, hy = beings[bestHumanIdx].y;
+            const targetAngle = Math.atan2(hy - b.y, hx - b.x) + randFloat(-0.2, 0.2);
+            let diff = wrapAngle(targetAngle - b.angle);
+            diff = clamp(diff, -0.1, 0.1);
+            b.angle = wrapAngle(b.angle + diff);
+            if (bestHumanDist2 < INFECT_DIST_SQ) {
+              beings[bestHumanIdx].pendingInfect = true;
+              b.speed = 0;
+            }
           } else {
-            // Hunt nearest human
-            let bestDist2 = 800000;
-            let bestIdx = -1;
-            for (let j = 0; j < beings.length; j++) {
-              if (j !== i && beings[j].type === 'human') {
-                const d2 = dist2(b.x, b.y, beings[j].x, beings[j].y);
-                if (d2 < bestDist2) { bestDist2 = d2; bestIdx = j; }
-              }
-            }
-            if (bestIdx >= 0) {
-              const targetAngle = Math.atan2(beings[bestIdx].y - b.y, beings[bestIdx].x - b.x) + randFloat(-0.2, 0.2);
-              let diff = wrapAngle(targetAngle - b.angle);
-              diff = clamp(diff, -0.1, 0.1);
-              b.angle = wrapAngle(b.angle + diff);
-              if (bestDist2 < INFECT_DIST_SQ) {
-                beings[bestIdx].pendingInfect = true;
-                b.speed = 0;
-              }
-            } else {
-              b.angle = wrapAngle(b.angle + randFloat(-0.1, 0.1));
-            }
+            // No target detected — wander
+            b.angle = wrapAngle(b.angle + randFloat(-0.1, 0.1));
           }
 
           // ── Peer repulsion: nudge angle away from nearby zombies ────────
