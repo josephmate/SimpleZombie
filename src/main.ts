@@ -9,19 +9,15 @@ import {
   Canvas,
 } from 'excalibur';
 import { InputHandler, IS_MOBILE } from './InputHandler';
-import { HudDisplay, GunState } from './HudDisplay';
+import { HudDisplay } from './HudDisplay';
 import { LevelLoader, LevelData, CELL_SIZE } from './LevelLoader';
+import { WeaponHandler } from './WeaponHandler';
 
 // ── Bullet system ─────────────────────────────────────────────────────────────
-const BULLET_SPEED      = 14;   // px per frame
 const BULLET_LIFETIME   = 60;   // frames before bullet expires
-const CLIP_SIZE         = 15;   // rounds per cartridge
-const SHOT_DELAY        = 7;    // frames between shots (like zombie4 pistol shotTime=7)
-const RELOAD_TIME       = 50;   // frames to reload (like zombie4 pistol reloadTime=30..40)
-const RECOIL_GROWTH_SPEED = 7;   // how much fireTime grows per shot
-const RECOIL_DECAY_SPEED  = 14;  // how much fireTime drops per frame when not shooting (faster than growth = encourages bursting)
-const RECOIL_MAX        = 60;   // max fireTime cap
-const BULLET_DAMAGE     = 34;   // HP per bullet hit
+
+// Weapon sub-system — gun configs, ammo, recoil and switching
+const weaponHandler = new WeaponHandler(['pistol']);
 
 // ── Corpse system ─────────────────────────────────────────────────────────────
 const BEING_MAX_HP      = 100;
@@ -93,12 +89,10 @@ interface Bullet {
   vy: number;
   age: number;
   actor: Actor;
+  damage: number;
 }
 
 const bullets: Bullet[] = [];
-const gunState: GunState = { bFired: 0, reloading: false, reloadTimer: 0 };
-let bTime      = SHOT_DELAY; // frames since last shot (start ready)
-let fireTime   = 0;          // accumulated recoil
 // ── Constants ──────────────────────────────────────────────────────────────────
 const GRID_W = 1200;
 const GRID_H = 900;
@@ -265,8 +259,7 @@ function startLevel(level: number): void {
   corpses.length = 0;
   for (const b of bullets) b.actor.kill();
   bullets.length = 0;
-  gunState.bFired = 0; gunState.reloading = false; gunState.reloadTimer = 0;
-  bTime = SHOT_DELAY; fireTime = 0;
+  weaponHandler.reset(['pistol']);
   walls.length = 0;
   wallSet.clear();
 
@@ -349,7 +342,7 @@ game.start().then(() => {
   let aiFrame = 0;
 
   // ── HUD canvas (ammo display) ─────────────────────────────────────────────
-  const hud = new HudDisplay(scene, GRID_H, gunState, CLIP_SIZE, RELOAD_TIME);
+  const hud = new HudDisplay(scene, GRID_H, weaponHandler.state);
 
   // ── Update loop ──────────────────────────────────────────────────────────
   scene.onPreUpdate = (_eng, _delta) => {
@@ -380,60 +373,18 @@ game.start().then(() => {
     hud.pinToViewport(vp.left, vp.bottom);
 
     // ── Shooting ──────────────────────────────────────────────────────────────
-    // Manual reload
-    if (inputs.reloadRequested && !gunState.reloading && gunState.bFired > 0) {
-      gunState.reloading = true;
-      gunState.reloadTimer = 0;
-      fireTime = 0;
-    }
-
-    // Reload tick
-    if (gunState.reloading) {
-      gunState.reloadTimer++;
-      if (gunState.reloadTimer >= RELOAD_TIME) {
-        gunState.reloading = false;
-        gunState.reloadTimer = 0;
-        gunState.bFired = 0;
-      }
-    }
-
-    bTime++;
-
-    if (inputs.isShooting && !gunState.reloading) {
-      if (bTime >= SHOT_DELAY && gunState.bFired < CLIP_SIZE) {
-        const len = Math.sqrt(inputs.shootDx * inputs.shootDx + inputs.shootDy * inputs.shootDy);
-        if (len > 0.001) {
-          // Apply recoil spread
-          const spreadMax = fireTime / 400;
-          const spread = randFloat(-spreadMax, spreadMax);
-          const angle = Math.atan2(inputs.shootDy, inputs.shootDx) + spread;
-          const speed = BULLET_SPEED * randFloat(0.95, 1.05);
-          const bActor = new Actor({ x: playerX, y: playerY, z: 8 });
-          bActor.graphics.use(new Circle({ radius: 2, color: Color.fromHex('#2a1a0a') }));
-          scene.add(bActor);
-          bullets.push({
-            x:  playerX,
-            y:  playerY,
-            vx: speed * Math.cos(angle),
-            vy: speed * Math.sin(angle),
-            age: 0,
-            actor: bActor,
-          });
-        }
-        bTime = 0;
-        gunState.bFired++;
-        fireTime = Math.min(fireTime + RECOIL_GROWTH_SPEED, RECOIL_MAX);
-
-        // Auto-reload when clip exhausted
-        if (gunState.bFired >= CLIP_SIZE) {
-          gunState.reloading = true;
-          gunState.reloadTimer = 0;
-          fireTime = 0;
-        }
-      }
-    } else {
-      // Decay recoil when not shooting
-      if (fireTime > 0) fireTime = Math.max(0, fireTime - RECOIL_DECAY_SPEED);
+    const spawns = weaponHandler.update(
+      inputs.isShooting,
+      inputs.reloadRequested,
+      playerX, playerY,
+      inputs.shootDx, inputs.shootDy,
+      randFloat,
+    );
+    for (const req of spawns) {
+      const bActor = new Actor({ x: req.x, y: req.y, z: 8 });
+      bActor.graphics.use(new Circle({ radius: 2, color: Color.fromHex('#2a1a0a') }));
+      scene.add(bActor);
+      bullets.push({ x: req.x, y: req.y, vx: req.vx, vy: req.vy, age: 0, damage: req.damage, actor: bActor });
     }
 
     // ── Bullet movement + hit detection ───────────────────────────────────────
@@ -461,7 +412,7 @@ game.start().then(() => {
         const HIT_R = (be.type === 'zombie' ? ZOMBIE_RADIUS : CIVILIAN_RADIUS) + 4;
         if (dist2(bul.x, bul.y, be.x, be.y) < HIT_R * HIT_R ||
             dist2(bul.x - bul.vx / 2, bul.y - bul.vy / 2, be.x, be.y) < HIT_R * HIT_R) {
-          be.hp -= BULLET_DAMAGE;
+          be.hp -= bul.damage;
           removeBullet(i);
           hit = true;
           if (be.hp <= 0) {

@@ -1,10 +1,7 @@
 import { Actor, Canvas, Scene, Vector } from 'excalibur';
+import { GunState } from './WeaponHandler';
 
-export interface GunState {
-  bFired: number;
-  reloading: boolean;
-  reloadTimer: number;
-}
+export type { GunState };
 
 const HUD_W = 200;
 const HUD_H = 30;
@@ -12,13 +9,9 @@ const HUD_H = 30;
 export class HudDisplay {
   private readonly actor: Actor;
   private readonly state: GunState;
-  private readonly clipSize: number;
-  private readonly reloadTime: number;
 
-  constructor(scene: Scene, gridH: number, state: GunState, clipSize: number, reloadTime: number) {
+  constructor(scene: Scene, gridH: number, state: GunState) {
     this.state = state;
-    this.clipSize = clipSize;
-    this.reloadTime = reloadTime;
 
     this.actor = new Actor({ x: HUD_W / 2 + 8, y: gridH - HUD_H / 2 - 8, z: 100 });
     this.actor.pos = new Vector(HUD_W / 2 + 8, gridH - HUD_H / 2 - 8);
@@ -49,11 +42,11 @@ export class HudDisplay {
     ctx.textAlign = 'left';
     ctx.textBaseline = 'middle';
     if (this.state.reloading) {
-      const pct = this.state.reloadTimer / this.reloadTime;
+      const pct = this.state.reloadTimer / this.state.reloadTime;
       ctx.fillText(`Reloading... ${Math.round(pct * 100)}%`, 8, HUD_H / 2);
     } else {
-      const ammoLeft = this.clipSize - this.state.bFired;
-      ctx.fillText(`Ammo: ${ammoLeft} / ${this.clipSize}`, 8, HUD_H / 2);
+      const ammoLeft = this.state.clipSize - this.state.bFired;
+      ctx.fillText(`Ammo: ${ammoLeft} / ${this.state.clipSize}`, 8, HUD_H / 2);
     }
   }
 }
