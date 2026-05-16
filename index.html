@@ -20,7 +20,7 @@
       }
       #joystick-zone {
         position: fixed;
-        bottom: 40px;
+        bottom: 100px;
         left: 40px;
         width: 120px;
         height: 120px;
@@ -29,28 +29,16 @@
       }
       #fire-zone {
         position: fixed;
-        bottom: 40px;
+        bottom: 100px;
         right: 40px;
         width: 120px;
         height: 120px;
         z-index: 100;
         display: none;
       }
-      @media (pointer: coarse) {
-        /* show only on touch/mobile devices */
-        #joystick-zone {
-          display: block;
-        }
-        #fire-zone {
-          display: block;
-        }
-        #weapon-cycle {
-          display: flex;
-        }
-      }
       #weapon-cycle {
         position: fixed;
-        bottom: 60px;
+        bottom: 20px;
         left: 50%;
         transform: translateX(-50%);
         display: none;
@@ -67,6 +55,18 @@
         font-size: 1.3rem;
         touch-action: none;
         cursor: pointer;
+      }
+      @media (pointer: coarse) {
+        /* show only on touch/mobile devices */
+        #joystick-zone {
+          display: block;
+        }
+        #fire-zone {
+          display: block;
+        }
+        #weapon-cycle {
+          display: flex;
+        }
       }
       /* ── Level select overlay ─────────────────────────────────────────── */
       #level-select {
