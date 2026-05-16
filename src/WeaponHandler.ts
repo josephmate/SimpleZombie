@@ -26,6 +26,8 @@ export interface GunState {
   reloadTimer: number;
   clipSize: number;
   reloadTime: number;
+  gunId: string;
+  gunName: string;
 }
 
 /** Returned by update() — one entry per bullet to spawn this frame. */
@@ -152,6 +154,8 @@ export class WeaponHandler {
     reloadTimer: 0,
     clipSize: 1,
     reloadTime: 1,
+    gunId: '',
+    gunName: '',
   };
 
   /**
@@ -320,6 +324,8 @@ export class WeaponHandler {
     const gun = this.currentGun;
     this.state.clipSize = gun.clipSize;
     this.state.reloadTime = gun.reloadTime;
+    this.state.gunId = gun.id;
+    this.state.gunName = gun.name;
   }
 
   private _saveCurrentAmmo(): void {
